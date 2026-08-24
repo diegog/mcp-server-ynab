@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { ConfigError, createClient } from "./client.ts";
 
 const NAME = "mcp-server-ynab";
 const VERSION = "0.1.0";
@@ -34,12 +35,26 @@ export function createServer(): McpServer {
 }
 
 async function main(): Promise<void> {
+  // Before the transport comes up, so a missing token kills the process with a
+  // readable reason instead of leaving a server whose every call 401s. The
+  // client is threaded into tool handlers when the registry lands (ENG-22).
+  const client = createClient();
+
   const server = createServer();
   await server.connect(new StdioServerTransport());
+
+  // stderr, never stdout — and never the token. The resolved default is worth
+  // saying out loud: it is what every tool call that omits plan_id will use.
+  console.error(`${NAME} ${VERSION} on stdio — default plan: ${client.resolvePlanId()}`);
 }
 
 main().catch((error: unknown) => {
   // stdout is the JSON-RPC channel — diagnostics must go to stderr.
-  console.error(`${NAME}: fatal:`, error);
+  if (error instanceof ConfigError) {
+    // The user's own misconfiguration; a stack trace would only bury it.
+    console.error(`${NAME}: ${error.message}`);
+  } else {
+    console.error(`${NAME}: fatal:`, error);
+  }
   process.exit(1);
 });
