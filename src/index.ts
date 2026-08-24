@@ -7,16 +7,9 @@ const NAME = "mcp-server-ynab";
 const VERSION = "0.1.0";
 
 /**
- * Declare the `tools` capability and install the tools/list + tools/call
- * handlers before any real tool exists.
- *
- * McpServer wires those handlers lazily, on first `registerTool`. With an empty
- * registry it would answer tools/list with -32601 and advertise no capability,
- * so a client could not tell an empty server from a broken one. Registering a
- * placeholder and immediately removing it runs that wiring; `remove()` drops the
- * entry but leaves the handlers in place, and tools/list then returns [].
- *
- * Delete this once the tool registry lands (ENG-22) and real tools register.
+ * Install the tools/list and tools/call handlers, which McpServer wires lazily
+ * on first `registerTool`. See AGENTS.md, "Startup". Delete once real tools
+ * register (ENG-22).
  */
 function declareToolsCapability(server: McpServer): void {
   server.registerTool("__placeholder", { description: "" }, () => ({ content: [] })).remove();
@@ -35,23 +28,19 @@ export function createServer(): McpServer {
 }
 
 async function main(): Promise<void> {
-  // Before the transport comes up, so a missing token kills the process with a
-  // readable reason instead of leaving a server whose every call 401s. The
-  // client is threaded into tool handlers when the registry lands (ENG-22).
+  // Before the transport: a missing token must kill the process, not leave a
+  // server whose every call 401s.
   const client = createClient();
 
   const server = createServer();
   await server.connect(new StdioServerTransport());
 
-  // stderr, never stdout — and never the token. The resolved default is worth
-  // saying out loud: it is what every tool call that omits plan_id will use.
   console.error(`${NAME} ${VERSION} on stdio — default plan: ${client.resolvePlanId()}`);
 }
 
 main().catch((error: unknown) => {
   // stdout is the JSON-RPC channel — diagnostics must go to stderr.
   if (error instanceof ConfigError) {
-    // The user's own misconfiguration; a stack trace would only bury it.
     console.error(`${NAME}: ${error.message}`);
   } else {
     console.error(`${NAME}: fatal:`, error);

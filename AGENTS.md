@@ -103,6 +103,26 @@ at 1.30.0 still tops out at `2025-11-25`. Build against what the SDK supports an
 bump when it ships support — `2026-07-28` defines backward compatibility with the
 handshake-based revisions. Tracked in ENG-38.
 
+## Documentation
+
+Rationale lives here, not in code comments. Exported symbols carry a one-line
+TSDoc saying *what* they are; *why* they have that shape belongs in this file, so
+there is one place to read and one place to keep current.
+
+Two kinds of comment survive in `src/`: an invariant a future editor would
+plausibly break without it, and a pointer to the section here that explains the
+surrounding decision. Anything longer has outgrown a comment.
+
+Where a rule is YNAB's rather than ours, link the API docs with `@see` instead of
+paraphrasing them — their wording is authoritative and ours goes stale. Verified
+anchors worth knowing: [`#personal-access-tokens`](https://api.ynab.com/#personal-access-tokens),
+[`#rate-limiting`](https://api.ynab.com/#rate-limiting),
+[`#errors`](https://api.ynab.com/#errors),
+[`#deltas`](https://api.ynab.com/#deltas),
+[`#oauth-default-plan`](https://api.ynab.com/#oauth-default-plan). Note the SDK's
+own JSDoc still cites the retired `api.youneedabudget.com` domain and pre-rename
+anchors; use `api.ynab.com`.
+
 ## Layout
 
 ```
@@ -110,11 +130,52 @@ src/index.ts    entrypoint: builds the server, connects stdio transport
 src/client.ts   the only place `ynab` is imported: auth + plan resolution
 ```
 
-`YnabClient` bundles the authenticated SDK with `resolvePlanId()`. `plan_id` is
-optional on every tool; handlers that need one call `client.resolvePlanId(planId)`,
-which falls back to `YNAB_DEFAULT_PLAN_ID` and then to the literal `"last-used"`
-that the API resolves to the user's most recently opened plan. Blank counts as
-absent at every step.
-
 The tool layer stays transport-agnostic, so an HTTP transport can be added later
 without reworking the tools.
+
+### The client module
+
+`src/client.ts` is the single place the `ynab` SDK is imported. Tool modules take
+a `YnabClient` and reach the SDK through `client.api`, so authentication and plan
+resolution have exactly one implementation. `YnabClient` is a plain interface,
+which is the seam the test harness (ENG-35) substitutes a fake through — no
+separate factory needed for it.
+
+**The token stays local to `createClient`.** It goes straight into the SDK
+constructor and is never stored on the returned client, logged, or put in an
+error message. Anything added to this module has to keep that true.
+
+**Plan resolution.** `plan_id` is optional on every tool, so handlers that need
+one call `client.resolvePlanId(planId)`: the explicit argument, else
+`YNAB_DEFAULT_PLAN_ID`, else the literal `"last-used"`. That last one is a free
+fallback — the API resolves it server-side to the user's most recently opened
+plan, costing no extra request and avoiding a guess when an account holds several
+plans.
+
+The API accepts a second literal, `"default"`, but only when default plan
+selection is enabled, which is an OAuth-application feature
+([docs](https://api.ynab.com/#oauth-default-plan)). We authenticate with a
+Personal Access Token, so `default_plan` comes back empty and `"default"` is not
+usable — deliberately left out of the chain rather than overlooked.
+
+**Blank counts as absent** at every step. A model passing `plan_id: ""`, or an
+env var set to the empty string, falls through to the next fallback rather than
+becoming a request for a plan named `""`.
+
+### Startup
+
+`main()` builds the client *before* connecting the transport, so a missing token
+kills the process with a readable reason instead of leaving a server whose every
+call 401s.
+
+`ConfigError` prints as a bare message: it is the user's own misconfiguration and
+a stack trace would only bury it. Everything else still prints as `fatal:` with
+its stack. The startup line on stderr names the resolved default plan, because
+that is what every tool call omitting `plan_id` will use.
+
+`declareToolsCapability()` registers a placeholder tool and immediately removes
+it. McpServer wires the `tools/list` and `tools/call` handlers lazily, on first
+`registerTool`; with an empty registry it would answer `tools/list` with `-32601`
+and advertise no capability, so a client could not tell an empty server from a
+broken one. `remove()` drops the entry but leaves the handlers in place, and
+`tools/list` then returns `[]`. Delete it once real tools register (ENG-22).

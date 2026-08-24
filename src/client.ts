@@ -1,26 +1,18 @@
 import { api as Ynab } from "ynab";
 
-/**
- * The authenticated YNAB SDK object. Tool modules take a `YnabClient` and reach
- * the SDK through it, so `ynab` is imported in exactly one place.
- */
+/** The authenticated YNAB SDK object. */
 export type YnabApi = Ynab;
 
 const TOKEN_ENV = "YNAB_ACCESS_TOKEN";
 const DEFAULT_PLAN_ENV = "YNAB_DEFAULT_PLAN_ID";
 
 /**
- * The API accepts this literal wherever a plan id is expected and resolves it to
- * the plan the user most recently opened. That makes it a free final fallback —
- * no extra request to look an id up, and no guessing when the user has several
- * plans.
+ * Plan id the API resolves to the user's most recently opened plan.
+ * @see https://api.ynab.com/#endpoints
  */
 export const LAST_USED_PLAN_ID = "last-used";
 
-/**
- * A startup misconfiguration — something the user has to fix in their
- * environment. Reported as a plain message, not a stack trace.
- */
+/** A missing or unusable environment variable. See AGENTS.md, "Startup". */
 export class ConfigError extends Error {
   constructor(message: string) {
     super(message);
@@ -31,21 +23,14 @@ export class ConfigError extends Error {
 export interface YnabClient {
   /** The SDK, already authenticated: `client.api.plans.getPlans()`. */
   readonly api: YnabApi;
-  /**
-   * The plan id a tool call should use: the explicit argument if it has one,
-   * else `YNAB_DEFAULT_PLAN_ID`, else `"last-used"`. `plan_id` is optional on
-   * every tool, so every handler that needs one goes through here.
-   */
+  /** Explicit argument, else `YNAB_DEFAULT_PLAN_ID`, else {@link LAST_USED_PLAN_ID}. */
   resolvePlanId(planId?: string): string;
 }
 
 /**
- * Build the client from the environment. Throws `ConfigError` if the access
- * token is missing, so the process dies at startup rather than serving a tool
- * surface where every call 401s.
- *
- * The token stays local to this function — it goes straight into the SDK and is
- * never stored on the returned client, logged, or put in an error message.
+ * Build the client from the environment, throwing {@link ConfigError} when the
+ * access token is absent. See AGENTS.md, "The client module".
+ * @see https://api.ynab.com/#personal-access-tokens
  */
 export function createClient(env: NodeJS.ProcessEnv = process.env): YnabClient {
   const token = provided(env[TOKEN_ENV]);
@@ -65,11 +50,7 @@ export function createClient(env: NodeJS.ProcessEnv = process.env): YnabClient {
   };
 }
 
-/**
- * Treat blank as absent. An env var set to the empty string and a model passing
- * `plan_id: ""` should both fall through to the next fallback rather than
- * becoming a request for a plan named "".
- */
+/** Blank counts as absent, so it falls through to the next fallback. */
 function provided(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
   return trimmed === undefined || trimmed === "" ? undefined : trimmed;
