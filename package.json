@@ -1,0 +1,44 @@
+{
+  "name": "mcp-server-ynab",
+  "version": "0.1.0",
+  "description": "MCP server wrapping the YNAB API, over stdio.",
+  "keywords": [
+    "mcp",
+    "modelcontextprotocol",
+    "ynab",
+    "budget",
+    "finance"
+  ],
+  "license": "MIT",
+  "author": "Diego Garcia <diego@arrecho.tech>",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "bin": {
+    "mcp-server-ynab": "./dist/index.js"
+  },
+  "main": "./dist/index.js",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "dev": "node src/index.ts",
+    "build": "tsc",
+    "prepublishOnly": "npm run check && npm run build",
+    "typecheck": "tsc --noEmit",
+    "lint": "biome check .",
+    "format": "biome check --write .",
+    "check": "npm run lint && npm run typecheck"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "ynab": "^4.5.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.5.10",
+    "@types/node": "^26.3.0",
+    "typescript": "^7.0.2"
+  }
+}
