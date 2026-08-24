@@ -14,7 +14,8 @@ Requires Node 26+, which runs TypeScript directly.
 
 ```bash
 npm install
-node src/index.ts     # start the server on stdio
+cp .env.example .env  # then add your Personal Access Token
+npm run dev           # start the server on stdio
 npm run check         # lint + typecheck
 ```
 

@@ -37,7 +37,7 @@ Conventions:
 ## Commands
 
 ```bash
-node src/index.ts      # run the server (no build step — see below)
+npm run dev            # run the server, loading .env (no build step — see below)
 npm run build          # tsc → dist/, for publish
 npm run typecheck      # tsc --noEmit
 npm run lint           # biome check .
@@ -87,6 +87,15 @@ with "budget" as the verb.
 **Never commit a token.** `YNAB_ACCESS_TOKEN` lives in the environment or `.env`,
 which is gitignored. See `.env.example`.
 
+**The server never reads `.env` itself.** In production an MCP client spawns it
+with the token already in the environment, and cwd is whatever that client
+happened to be in — a cwd-relative `.env` would be unpredictable at best. Local
+runs load it at launch instead: `npm run dev` passes
+`--env-file-if-exists=.env`, which warns to stderr and continues when the file
+is absent (plain `--env-file` exits 9). A real environment variable takes
+precedence over the file, so a stray `.env` can never shadow the token a client
+passed in.
+
 ## Protocol version
 
 The current published MCP spec revision is `2026-07-28`, but the TypeScript SDK
@@ -98,7 +107,14 @@ handshake-based revisions. Tracked in ENG-38.
 
 ```
 src/index.ts    entrypoint: builds the server, connects stdio transport
+src/client.ts   the only place `ynab` is imported: auth + plan resolution
 ```
+
+`YnabClient` bundles the authenticated SDK with `resolvePlanId()`. `plan_id` is
+optional on every tool; handlers that need one call `client.resolvePlanId(planId)`,
+which falls back to `YNAB_DEFAULT_PLAN_ID` and then to the literal `"last-used"`
+that the API resolves to the user's most recently opened plan. Blank counts as
+absent at every step.
 
 The tool layer stays transport-agnostic, so an HTTP transport can be added later
 without reworking the tools.
