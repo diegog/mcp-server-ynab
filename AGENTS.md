@@ -133,6 +133,7 @@ src/client.ts           the only place `ynab` is imported: auth + plan resolutio
 src/errors.ts           maps a failed call to text the model can recover from
 src/money.ts            decimal amounts in, milliunits out, on the write path
 src/tools/registry.ts   the tool shape, and the one adapter onto the MCP SDK
+src/tools/arguments.ts  arguments more than one tool takes, described once
 src/tools/index.ts      every tool the server serves
 src/tools/<tool>.ts     one file per tool, named after it
 ```
@@ -213,6 +214,44 @@ by editing `TOOLS`, and `byName` compares codepoints rather than using
 
 Tool names are snake_case with no prefix. The spec allows `[A-Za-z0-9_.-]` and
 blesses dot-namespacing, but namespacing across servers is the client's job.
+
+### Shared tool arguments
+
+`src/tools/arguments.ts` holds the arguments more than one tool takes, for the
+reason `money.ts` holds `moneyArgument`: an argument's description is the only
+place its meaning is stated, and one worded well in one tool and badly in the
+next is worse than one worded identically everywhere. `plan_id` appears on every
+tool and `month` on most of the read surface, so both live here.
+
+**`plan_id` and `month` arrive already optional; ids do not.** `plan_id` is
+optional on every tool without exception, and `month` on every tool that has so
+far taken one, so baking `.optional()` into those two means no tool can forget
+it. An id is a filter on some tools (`account_id` on `list_transactions`) and the
+subject of others (`transaction_id` on `get_transaction`), so `idArgument`
+returns the bare schema and the call site adds `.optional()` where it belongs.
+
+**Descriptions say what omitting the argument does.** A model that cannot tell
+what happens when it leaves `plan_id` out will supply something to be safe, and
+the only value it can supply is a guess. So the text spells out the fallback
+chain in behavioural terms — the configured plan, then the last one opened —
+without naming the environment variables behind it, which the model can neither
+read nor set.
+
+**Ids are opaque and the schema says so.** Every id description ends by naming
+the tool that lists them. Same reasoning as the loose output schemas: the value
+is YNAB's to shape, `z.uuid()` would reject a legal id before the call is made,
+and telling the model where ids come from prevents more bad calls than a pattern
+that only rejects them afterwards.
+
+`"current"` is the one literal `month` accepts — verified against YNAB's
+OpenAPI spec, which documents it on all six month path parameters. There is no
+`"last"` or `"next"`; a tool wanting the previous month computes the date.
+
+Output schemas are deliberately absent here. The transaction shape is shared
+between `list_transactions` and `list_scheduled_transactions`, and the category
+shape between `list_categories` and `list_money_movements`, but each should be
+lifted out of whichever tool lands first rather than guessed at before either
+exists (ENG-39).
 
 ### Money on the write path
 
