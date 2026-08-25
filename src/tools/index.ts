@@ -11,7 +11,7 @@ import { listScheduledTransactions } from "./list-scheduled-transactions.ts";
 import { listTransactions } from "./list-transactions.ts";
 import type { AnyToolDefinition } from "./registry.ts";
 
-/** Every tool the server serves. Order here is irrelevant — the registry sorts. */
+/** Every tool the server can serve. Order here is irrelevant — the registry sorts. */
 export const TOOLS: readonly AnyToolDefinition[] = [
   getPlan,
   getTransaction,

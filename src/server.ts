@@ -2,26 +2,51 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import type { YnabClient } from "./client.ts";
 import { TOOLS } from "./tools/index.ts";
-import { registerTools } from "./tools/registry.ts";
+import { type AnyToolDefinition, registerTools } from "./tools/registry.ts";
 
 /** The name and version reported in the MCP handshake. */
 export const NAME = "mcp-server-ynab";
 export const VERSION = "0.1.0";
 
+/** What a server serves, beyond the client it reaches YNAB through. */
+export interface ServerOptions {
+  /** Serve the read surface alone. See AGENTS.md, "Read-only mode". */
+  readonly readOnly?: boolean;
+}
+
 /**
- * Build the server with every tool registered against `client`. No transport is
- * attached and nothing is read from the environment — see AGENTS.md, "Startup".
+ * Build the server, registering the tools it serves against `client` — the read
+ * surface alone when `readOnly`. No transport is attached and nothing is read from
+ * the environment, per AGENTS.md, "Startup" and "Read-only mode".
  */
-export function createServer(client: YnabClient): McpServer {
+export function createServer(client: YnabClient, options: ServerOptions = {}): McpServer {
+  const readOnly = options.readOnly ?? false;
   const server = new McpServer(
     { name: NAME, version: VERSION },
-    {
-      instructions:
-        "Read and modify a YNAB budget. YNAB calls a budget a 'plan'; most tools take a planId.",
-    },
+    { instructions: instructionsFor(readOnly) },
   );
-  registerTools(server, TOOLS, { client });
+  // Filtered before registration, never registered and disabled: see AGENTS.md,
+  // "Read-only mode".
+  registerTools(server, readOnly ? TOOLS.filter(reads) : TOOLS, { client });
   return server;
+}
+
+/** Whether a tool only reads. Total, because `readOnlyHint` is required on every tool. */
+function reads(tool: AnyToolDefinition): boolean {
+  return tool.annotations.readOnlyHint;
+}
+
+/** The handshake's one chance to say what this server is and what it will not do. */
+function instructionsFor(readOnly: boolean): string {
+  const surface = readOnly
+    ? "Read a YNAB budget. This server is running read-only and serves no tool that " +
+      "creates, changes or deletes anything."
+    : "Read and modify a YNAB budget.";
+  return (
+    `${surface} YNAB calls a budget a 'plan'; most tools take an optional plan_id, and ` +
+    "omitting it acts on the plan the server was configured with, or the one most recently " +
+    "opened in YNAB."
+  );
 }
 
 /**
