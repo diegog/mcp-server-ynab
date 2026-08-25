@@ -45,6 +45,15 @@ export function monthArgument(meaning: string): z.ZodOptional<z.ZodString> {
 }
 
 /**
+ * The value of an optional string argument the caller actually supplied. Blank
+ * counts as absent, as it does in `resolvePlanId`.
+ */
+export function supplied(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed === "" ? undefined : trimmed;
+}
+
+/**
  * An id of some other YNAB record. `tool` is the tool that lists them. Unlike
  * the two above this is required, since an id is a filter on some tools and the
  * subject of others — add `.optional()` where it is a filter.

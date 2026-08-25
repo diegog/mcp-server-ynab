@@ -1,6 +1,8 @@
 import { getPlan } from "./get-plan.ts";
 import { getTransaction } from "./get-transaction.ts";
 import { getUser } from "./get-user.ts";
+import { listAccounts } from "./list-accounts.ts";
+import { listCategories } from "./list-categories.ts";
 import { listPlans } from "./list-plans.ts";
 import { listTransactions } from "./list-transactions.ts";
 import type { AnyToolDefinition } from "./registry.ts";
@@ -10,6 +12,8 @@ export const TOOLS: readonly AnyToolDefinition[] = [
   getPlan,
   getTransaction,
   getUser,
+  listAccounts,
+  listCategories,
   listPlans,
   listTransactions,
 ];
