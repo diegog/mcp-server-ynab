@@ -13,7 +13,7 @@ function lookedUpWith(tool: string): string {
 
 /**
  * The plan a tool acts on. Optional here rather than at each call site, because
- * it is optional on every tool without exception.
+ * it is optional wherever it appears.
  * @see https://api.ynab.com/#endpoints
  */
 export function planIdArgument(): z.ZodOptional<z.ZodString> {

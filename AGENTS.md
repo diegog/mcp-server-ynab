@@ -22,7 +22,7 @@ Work is organised into four milestones:
 | -------------------- | ----------------------------------------------------------------- |
 | M1 — Foundation      | Repo, YNAB client, server bootstrap, errors, money conversion      |
 | M2 — Read surface    | 11 read tools covering all 23 read operations                      |
-| M3 — Write surface   | ~14 write tools, read-only mode, write-safety annotations          |
+| M3 — Write surface   | 15 write tools, read-only mode, write-safety annotations           |
 | M4 — Hardening & ship| Caching, test harness, docs, npm publish                           |
 
 Conventions:
@@ -74,7 +74,7 @@ never with `amount * 1000`.
 
 **Writes are real.** Creating transactions and updating budgeted amounts mutate
 live financial records. There is no sandbox. Treat write tools accordingly:
-annotate them, and honour read-only mode (ENG-30).
+annotate them, and leave read-only mode able to withhold them.
 
 **Rate limit: 200 requests/hour per token**, rolling window. Caching and delta
 requests (`last_knowledge_of_server`) are load-bearing, not optimisations
@@ -127,14 +127,14 @@ anchors; use `api.ynab.com`.
 ## Layout
 
 ```
-src/index.ts            entrypoint: reads the environment, connects stdio transport
-src/server.ts           builds the McpServer and registers every tool
+src/index.ts            entrypoint: reads the environment and argv, connects stdio
+src/server.ts           builds the McpServer and registers the tools it serves
 src/client.ts           the only place `ynab` is imported: auth + plan resolution
 src/errors.ts           maps a failed call to text the model can recover from
 src/money.ts            decimal amounts in, milliunits out, on the write path
 src/tools/registry.ts   the tool shape, and the one adapter onto the MCP SDK
 src/tools/arguments.ts  arguments more than one tool takes, described once
-src/tools/index.ts      every tool the server serves
+src/tools/index.ts      every tool the server can serve
 src/tools/<tool>.ts     one file per tool, named after it
 ```
 
@@ -153,9 +153,9 @@ separate factory needed for it.
 constructor and is never stored on the returned client, logged, or put in an
 error message. Anything added to this module has to keep that true.
 
-**Plan resolution.** `plan_id` is optional on every tool, so handlers that need
-one call `client.resolvePlanId(planId)`: the explicit argument, else
-`YNAB_DEFAULT_PLAN_ID`, else the literal `"last-used"`. That last one is a free
+**Plan resolution.** `plan_id` is optional on every tool that acts on a plan, so
+handlers that need one call `client.resolvePlanId(planId)`: the explicit
+argument, else `YNAB_DEFAULT_PLAN_ID`, else the literal `"last-used"`. That last one is a free
 fallback — the API resolves it server-side to the user's most recently opened
 plan, costing no extra request and avoiding a guess when an account holds several
 plans.
@@ -184,14 +184,50 @@ touches this one module and no tool.
 
 **All four annotations are required**, not optional as in the SDK's
 `ToolAnnotations`. `destructiveHint` and `idempotentHint` are only meaningful when
-`readOnlyHint` is false, but requiring them means no tool can reach M3 without
-someone having stated its safety posture in writing. ENG-30 fixes the values each
-kind of write tool must carry.
+`readOnlyHint` is false, but requiring them means no tool can ship without someone
+having stated its safety posture in writing.
 
-**`openWorldHint` is `false` throughout.** The tools reach an external service,
-but their domain of interaction is closed and enumerable: the token holder's own
-plans, accounts, and transactions. That is the distinction the hint draws — a web
-search is open, a database is not.
+The spec's own wording fixes the values, and two of its sentences are easy to
+misread. `destructiveHint: false` is a claim that the tool "performs only additive
+updates", so writing a new amount over a transaction's — or a new `budgeted` over
+a month category's — is destructive, and deletes are not the only verb that
+qualifies. `idempotentHint` asks whether repeated calls "have no additional effect
+on its environment", which is about the environment rather than the response: a
+second delete answering 404 is still idempotent, because the world is in the state
+the first call left it in.
+
+|                                   | `readOnlyHint` | `destructiveHint` | `idempotentHint` |
+| --------------------------------- | -------------- | ----------------- | ---------------- |
+| reads                             | true           | false             | true             |
+| `create_transaction`              | false          | true              | false            |
+| other `create_*`                  | false          | false             | false            |
+| `update_*`, `set_category_budget` | false          | true              | true             |
+| `delete_*`                        | false          | true              | true             |
+| `import_transactions`             | false          | true              | false            |
+
+`create_transaction` is the row that makes this a table about what a tool may do
+rather than about its verb. Given an `import_id` it does not merely insert: YNAB
+matches the new row against an existing user-entered transaction on the same
+account, with the same amount, within ten days either way, and the imported
+amount wins.
+
+`import_transactions` reaches the same matching from the other side — a Direct
+Import is what user-entered rows get matched against — so it is destructive for
+the same reason, and it is not idempotent either: a second call imports whatever
+the bank delivered in between.
+
+**`openWorldHint` is `false` throughout, on an entity-set reading.** The spec's
+only illustration is that "the world of a web search tool is open, whereas that of
+a memory tool is not", and these tools sit on the memory side of it: they reach an
+external service, but their domain of interaction is closed and enumerable — the
+token holder's own plans, accounts, and transactions.
+
+That is a claim about the entities and deliberately not a claim that the payload
+is trusted. Rows here carry bank- and merchant-authored payee names and free-text
+memos into the model's context, and MCP's own commentary reads `openWorldHint:
+true` as flagging a trust boundary being crossed. Both readings are available and
+this one is ours: a client hardening against untrusted tool output should not take
+the `false` as an assurance about content.
 
 **Handlers return data; the registry builds the result.** A tool with an
 `outputSchema` must return `structuredContent`, and the spec asks it to repeat the
@@ -220,13 +256,15 @@ blesses dot-namespacing, but namespacing across servers is the client's job.
 `src/tools/arguments.ts` holds the arguments more than one tool takes, for the
 reason `money.ts` holds `moneyArgument`: an argument's description is the only
 place its meaning is stated, and one worded well in one tool and badly in the
-next is worse than one worded identically everywhere. `plan_id` appears on every
-tool and `month` on most of the read surface, so both live here.
+next is worse than one worded identically everywhere. `plan_id` appears on nearly
+every tool and `month` on most of the read surface, so both live here.
 
 **`plan_id` and `month` arrive already optional; ids do not.** `plan_id` is
-optional on every tool without exception, and `month` on every tool that has so
-far taken one, so baking `.optional()` into those two means no tool can forget
-it. An id is a filter on some tools (`account_id` on `list_transactions`) and the
+optional wherever it appears, and `month` on every tool that has so far taken
+one, so baking `.optional()` into those two means no tool can forget it. The two
+tools that name no plan at all — `get_user`, whose subject is the token holder,
+and `list_plans`, which is where a plan id comes from — take no arguments
+whatever. An id is a filter on some tools (`account_id` on `list_transactions`) and the
 subject of others (`transaction_id` on `get_transaction`), so `idArgument`
 returns the bare schema and the call site adds `.optional()` where it belongs.
 
@@ -657,7 +695,9 @@ ever holds it. Keep it that way rather than adding scrubbing.
 
 `ToolError` is for failures this server raises deliberately, where the message is
 already written for the model; it passes through with only the tool name added.
-Read-only mode (ENG-30) is its first real user.
+`toMilliunits` is its first user, and the write tools that refuse an argument YNAB
+would silently ignore will be the next. Read-only mode is not one of them: it
+withholds tools rather than refusing calls, so nothing there ever throws.
 
 **Not-found messages echo the ids that were passed.** YNAB says only that
 something was missing, never which id, so the registry hands `describeFailure`
@@ -688,6 +728,62 @@ and offers no way to change it. Both drafts are explicitly allowed by the spec,
 and for our schemas the two are byte-identical apart from that one string, so this
 is cosmetic — but it is a deviation from the ticket, not an oversight.
 
+### Read-only mode
+
+`--read-only`, or `YNAB_READ_ONLY` in the environment, serves the read surface
+alone. Write tools are **not registered**, rather than registered and refusing: a
+tool the model cannot see is a tool it cannot be talked into trying.
+
+**Filtered before registration, never `disable()`d.** The SDK's `RegisteredTool`
+handle can hide a tool from `tools/list`, and it looks equivalent, but it is not.
+`McpServer` answers a call to a disabled tool with "Tool `set_category_budget`
+disabled" where an unregistered name gets "not found" — the first confirms the
+write surface exists and invites the model to ask the user to enable it. A
+disabled tool also keeps its handler and closure in `_registeredTools`, one
+`update({enabled: true})` away from being reachable again.
+
+**The flag is read in `index.ts`, never in `server.ts`.** `createServer` takes
+`{ readOnly }` and reads nothing from the environment itself, which is what keeps
+it the seam the test harness builds through (ENG-35). Registration still happens
+before `connect`, because `McpServer` registers the tools capability lazily on the
+first `registerTool` and throws outright if capabilities appear after a transport
+is attached.
+
+**Anything but absent, blank, `0` or `false` turns it on.** That is a deliberate
+asymmetry with `resolvePlanId`, where blank falls through to the next fallback.
+Here the two failure directions are not equal: reading `YNAB_READ_ONLY=no` as "off"
+and serving writes to someone who meant to forbid them is worse than the reverse,
+so the setting errs towards being set, and only the spellings that unambiguously
+mean "no" turn it off. The flag reads its own value the same way, so
+`--read-only=true` and `--read-only` agree.
+
+**A near-miss on the flag stops the process.** Every other argument is rejected
+with a `ConfigError`, rather than ignored as an exact-match test would ignore it.
+`--read-only=true` is the spelling an MCP client config invites, `--readonly` is
+the one a person types, and silently serving the write surface to either is the
+failure direction the paragraph above calls the worse one. A server that refuses
+to start beats a writable one that starts quietly.
+
+**The mode is announced once, in the handshake, not in every tool.** Two read
+descriptions point forward at tools the write surface will add, and in read-only
+mode those pointers dangle. Hedging each of them would make the default
+configuration read worse to serve the exception, so `instructions` says the server
+is read-only and the descriptions stay written for the normal case.
+
+Annotations are the other half of this: their values, and why the spec's wording
+decides them, are under "The tool registry". They are a signal to well-behaved
+clients and not a boundary — the spec requires clients to treat annotations as
+untrusted unless the server itself is trusted, so `--read-only` plus the client's
+own confirmation is the actual guard.
+
+**Server-side confirmation is deliberately not built.** Revision `2026-07-28` adds
+`InputRequiredResult` for asking mid-call, which could confirm a destructive write
+without trusting the client to. The SDK at 1.30.0 implements none of it, and the
+one mid-call path it does have — `server.elicitInput()` — is exactly the
+server-initiated-request pattern that `2026-07-28` removes as a breaking change.
+Building on it now would buy a rewrite at ENG-38 for something the spec already
+asks clients to do. Revisit when the SDK ships MRTR.
+
 ### Startup
 
 `main()` builds the client *before* connecting the transport, so a missing token
@@ -697,9 +793,11 @@ call 401s.
 `ConfigError` prints as a bare message: it is the user's own misconfiguration and
 a stack trace would only bury it. Everything else still prints as `fatal:` with
 its stack. The startup line on stderr names the resolved default plan, because
-that is what every tool call omitting `plan_id` will use.
+that is what a tool call omitting `plan_id` will use, and says so when the server
+is read-only.
 
 `createServer` reads nothing from the environment and attaches no transport, so
 the test harness (ENG-35) can build a server over an in-memory transport with a
 faked `YnabClient`. `index.ts` holds everything that only makes sense in a real
-process: reading the environment, stdio, and exiting non-zero.
+process: reading the environment and the command line, stdio, and exiting
+non-zero.
