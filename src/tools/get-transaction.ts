@@ -1,6 +1,6 @@
 import { idArgument, planIdArgument } from "./arguments.ts";
-import { toTransaction, transactionSchema } from "./list-transactions.ts";
 import { defineTool } from "./registry.ts";
+import { toTransaction, transactionSchema } from "./shapes.ts";
 
 /** Fetch one transaction by id, in the shape `list_transactions` reports. */
 export const getTransaction = defineTool({

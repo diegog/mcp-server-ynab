@@ -8,6 +8,8 @@ export interface FailureContext {
   readonly tool: string;
   /** The raw arguments, so a not-found message can echo the ids that were used. */
   readonly args: unknown;
+  /** Whether the tool mutates. A 400 reads differently on a write — see `writeRejected`. */
+  readonly writes: boolean;
 }
 
 /** A failure this server raised deliberately; its message is already actionable. */
@@ -29,15 +31,16 @@ interface YnabFailure {
 const ID_ARGUMENT = /(?:^|_)id$|^month$/;
 
 /** Describe `error` for the model, as the text of an `isError` tool result. */
-export function describeFailure(error: unknown, { tool, args }: FailureContext): string {
-  return `${tool}: ${explain(error, args)}`;
+export function describeFailure(error: unknown, { tool, args, writes }: FailureContext): string {
+  return `${tool}: ${explain(error, args, writes)}`;
 }
 
-function explain(error: unknown, args: unknown): string {
+function explain(error: unknown, args: unknown, writes: boolean): string {
   if (error instanceof ToolError) return error.message;
 
   const failure = asYnabFailure(error);
   if (failure !== undefined) {
+    if (writes && Number.parseInt(failure.id, 10) === 400) return writeRejected(failure, args);
     return `${advise(failure, args)} (YNAB error ${failure.id} ${failure.name}: ${failure.detail})`;
   }
 
@@ -134,7 +137,7 @@ function advise(failure: YnabFailure, args: unknown): string {
       return (
         "YNAB refused to save this because it conflicts with a record that already exists. On " +
         "a transaction this is nearly always a duplicate `import_id`, which YNAB requires to be " +
-        "unique within a plan — the earlier transaction is the one that stuck, so treat this " +
+        "unique within its account — the earlier transaction is the one that stuck, so treat this " +
         `call as already done.${idsIn(args)} Do not retry with the same values.`
       );
     case 429:
@@ -162,6 +165,24 @@ function advise(failure: YnabFailure, args: unknown): string {
     default:
       return "YNAB rejected the request.";
   }
+}
+
+/**
+ * A 400 on a write. It is the only failure most write endpoints document and it
+ * covers a dozen unrelated rules, which YNAB discriminates only in `detail` — so
+ * `detail` leads here rather than trailing generic advice in a parenthesis.
+ */
+function writeRejected(failure: YnabFailure, args: unknown): string {
+  return (
+    `YNAB rejected the write and gave this reason: ${failure.detail} That sentence is YNAB's ` +
+    "own, and it is the only thing separating this from the other rules the same 400 covers: a " +
+    "date more than five years out, a future date on a transaction or a past one on a scheduled " +
+    "transaction, a split on a tracking account, changing the lines of a split that already " +
+    "exists, filing a category under an internal group, an over-length memo, or an account type " +
+    `that cannot be created through the API.${idsIn(args)} Nothing was saved. Fix the argument ` +
+    `it names rather than sending the call again as it stands. (YNAB error ${failure.id} ` +
+    `${failure.name})`
+  );
 }
 
 /**
