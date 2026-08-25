@@ -253,6 +253,45 @@ shape between `list_categories` and `list_money_movements`, but each should be
 lifted out of whichever tool lands first rather than guessed at before either
 exists (ENG-39).
 
+### Plan discovery
+
+`list_plans` is where a model gets a `plan_id`, so its payload stays
+proportional to the number of plans rather than to their contents. `getPlans`
+takes an `include_accounts` flag, deliberately not exposed: accounts belong to a
+single plan and have their own tool, and folding them in would make the call
+every session starts with grow with the number of accounts across every plan.
+For the same reason the summaries drop the currency and date formats YNAB sends
+with them, which `get_plan` reports instead — the read tools pass YNAB's own
+formatted amounts through, so nothing else needs a format to interpret a number.
+The response's `default_plan` is dropped too: it is populated only for an OAuth
+application with default plan selection enabled, which a Personal Access Token
+is not. See "The client module".
+
+**`configured_plan_id` answers the question the list raises.** Having seen three
+plans, a model still cannot tell which one a call that omits `plan_id` will act
+on. The field is that resolved fallback, and it is absent rather than
+`"last-used"` when no plan is configured, because the literal is YNAB's
+placeholder and not an id the model could pass back.
+
+**`get_plan` makes one request, not two.** ENG-25 asked for a merge of
+`getPlanById` and `getPlanSettingsById`, on the understanding that settings adds
+a first-day-of-week. It does not: settings returns `date_format` and
+`currency_format` and nothing else, and the plan export already carries both.
+All a second request would add is that settings declares the two required rather
+than optional — and its parser passes a null straight through where the export
+maps one to absent, so even that guarantees the key and not a value. That is not
+worth one of 200 requests an hour. Should YNAB add a setting later, this is the
+tool to fetch it, concurrently with the export.
+
+**The export is paid for on the wire; the counts bound what reaches the model.**
+`getPlanById` is a full plan export, and it is the only endpoint that will name
+a plan given `"last-used"`, so `get_plan` cannot avoid making it. What it can
+avoid is re-serialising accounts, categories, payees, months and every
+transaction into the model's context, so each collection is reported as a single
+count and left to its own list tool. Those counts are of live records only:
+deleted records come back solely on delta requests, which nothing makes yet
+(ENG-34).
+
 ### Money on the write path
 
 Every money argument on a write tool is a **decimal amount in the plan's
