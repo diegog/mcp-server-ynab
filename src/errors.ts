@@ -106,8 +106,9 @@ function advise(failure: YnabFailure, args: unknown): string {
     case 400:
       return (
         "YNAB rejected the arguments as malformed. Dates must be ISO `YYYY-MM-DD`, ids must be " +
-        `UUIDs taken from a list tool, and amounts are integer milliunits.${idsIn(args)} Fix ` +
-        "the arguments rather than retrying as sent."
+        "UUIDs taken from a list tool, and amounts are decimal amounts in the plan's currency, " +
+        `which this server converts to milliunits for you.${idsIn(args)} Fix the arguments ` +
+        "rather than retrying as sent."
       );
     case 401:
       return (
