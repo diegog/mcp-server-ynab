@@ -67,8 +67,8 @@ TypeScript 7 (the native compiler) and Biome 2 for lint + format.
 stream and the client sees a parse error. All diagnostics go to `stderr`.
 
 **Milliunits.** YNAB amounts are integers where `1000` = one currency unit. Reads
-are covered by the SDK's `_formatted` / `_currency` fields; **writes are not**,
-and the failure mode is a transaction off by 1000×. Write tools therefore take a
+are covered by the SDK's `_formatted` string; **writes are not**, and the
+failure mode is a transaction off by 1000×. Write tools therefore take a
 decimal amount and convert it in `src/money.ts` — never by hand in a handler, and
 never with `amount * 1000`.
 
@@ -446,12 +446,66 @@ listing. Amounts are YNAB's milliunit integer and its `_formatted` string; the
 is an ugly way to say `Account`, and it is what keeps `src/client.ts` the only
 module in the tree that names `ynab`.
 
+### Months and payees
+
+`list_months` answers "how did last month go" — income, assigned, activity and
+Ready to Assign — for every month or for one. Naming a `month` routes to
+`getPlanMonth`, which returns a `MonthDetail`: the same fields plus that
+month's whole category list. **That list is dropped**, so the tool has one
+shape either way and a caller asking how a month went is not handed a few
+hundred category rows it never asked for — a `months` array that happens to be
+one entry long.
+
+Know what that costs, because it is not what it looks like. `MonthDetail`'s
+categories are the only place YNAB reports per-month category amounts in bulk:
+`getCategories` reports the *current* month whatever month is asked about, and
+`getMonthCategoryById` is one request per category, which the hourly limit
+cannot absorb across a plan. So a breakdown of how each category did in some
+past month is presently answerable nowhere in the read surface, and the tool
+descriptions must not send a model to `list_categories` for it. Surfacing them
+behind a flag here is the cheap fix when someone wants it — the rows are
+already in a response we have paid for.
+
+**Amounts carry the raw milliunits and YNAB's formatted string, and nothing
+else.** The API offers a `_currency` decimal beside each one, but it is the
+milliunit integer divided by a thousand, and a third spelling of the same
+number on every row of a sixty-month list is context paid for twice. That is the
+rule for the read surface as a whole rather than a quirk of this tool: no read
+tool reports `_currency`. `age_of_money` has no companion at all: it is a count
+of days rather than money, and treating it as milliunits would report an Age of
+Money in the thousands.
+
+`list_payees` folds payee locations in behind `include_locations` rather than
+giving them tools of their own — they are the coordinates the phone app matches
+against to guess a payee, real data that nobody asks for by name. The flag is
+off by default because it is a second request. With `payee_id` it routes to
+`getPayeeLocationsByPayee`; without one it makes exactly one call to
+`getPayeeLocations`. Never a call per payee: that is the fan-out the hourly
+limit cannot absorb.
+
+**`payee_location_id` is how `getPayeeLocationById` stays reachable.** Location
+ids exist nowhere else in the surface — the only way to hold one is to have
+listed locations, which returned the payee beside it. So the lookup answers
+with that location alone and stays a single request, rather than spending a
+second one re-fetching a payee the caller already has. Locations therefore come
+back as a top-level list keyed by `payee_id` instead of nested inside each
+payee: the same shape then serves the lookup, which has no payee to nest under.
+`latitude` and `longitude` stay strings, because that is what YNAB sends.
+
+**Neither tool returns `deleted` or `server_knowledge`.** YNAB sets `deleted`
+only on records that come back from a delta request, and we make none until
+ENG-34; a field that is `false` on every row of every response is a tax on the
+model's context, and once deltas land, reporting what vanished is that layer's
+job. A blank `month` or id counts as absent for the reason it does in
+`resolvePlanId`: the alternative is asking YNAB for a record named `""`.
+
 ### Money on the write path
 
 Every money argument on a write tool is a **decimal amount in the plan's
 currency**; `src/money.ts` converts it to milliunits at the handler boundary.
-Reads keep passing YNAB's own `_formatted` / `_currency` fields through, so
-nothing on that side does arithmetic.
+Reads keep passing YNAB's own `_formatted` string through, so nothing on that
+side does arithmetic; the `_currency` decimal is dropped throughout the read
+surface, for the reason under "Months and payees".
 
 Two things had to be said in the schema, because neither is guessable and both
 fail silently. `moneyArgument` and `transactionAmountArgument` build the
