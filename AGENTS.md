@@ -253,6 +253,95 @@ shape between `list_categories` and `list_money_movements`, but each should be
 lifted out of whichever tool lands first rather than guessed at before either
 exists (ENG-39).
 
+### Transaction queries
+
+`list_transactions` is one tool over six endpoints — `getTransactions`, the four
+scoped variants and `getTransactionsByType` — because they are one query with
+different filters, and six tools would make the model pick between six ways of
+asking the same thing. `planQuery` in `src/tools/list-transactions.ts` turns the
+arguments into the single call to make and the handler only runs the result.
+Keeping the choice out of the call is what makes it checkable: given an
+`account_id`, the plan says `getTransactionsByAccount` before there is a request
+to inspect.
+
+All five list endpoints send `since_date`, `until_date` and `type` themselves —
+`node_modules/ynab/dist/apis/TransactionsApi.js` if that is ever in doubt. Older
+notes saying the scoped variants take only some of the three are wrong for SDK
+4.5.0, and none of the three is ever filtered in process.
+
+**No endpoint takes two scopes, so the scopes are ranked**: `category_id`, then
+`payee_id`, then `account_id`, then `month`. The first one present wins the
+request and the rest are applied to the rows that come back — except `month`,
+which becomes a date bound instead. A blank id or month counts as absent, as it
+does in `resolvePlanId`.
+
+The order is not about response size. `getTransactionsByCategory` and
+`getTransactionsByPayee` are the only two that return the lines of a split
+transaction as rows in their own right — everywhere else a split arrives as one
+parent whose category reads `Split` — so an account filter and a date bound are
+exact on either shape and a category or payee filter applied in process is not.
+Category outranks payee because a residual category test cannot match a split at
+all: YNAB leaves `category_id` unset on the parent and names its category
+`Split`, so ranking payee first would drop every split it was asked for. The
+residual payee test the chosen order leaves behind is exact on every ordinary
+transaction and loses only a split line carrying no payee of its own — that line
+is dropped even when the parent holds the payee asked for. Neither order is
+lossless once a category and a payee are given together and a split is involved;
+this one loses less.
+
+**A `month` that loses becomes `since_date` and `until_date`, not a row filter.**
+YNAB defaults `since_date` to one year ago on every list endpoint but the
+by-month one, so an `account_id` beside a `month` would otherwise fetch a year of
+that account to keep one month of it — and return nothing at all for a month
+older than that year, which reads to the model as a plan holding no such
+transactions. `planQuery` turns the month into its first and last day, resolving
+`current` against the clock in UTC as YNAB would have, and intersects those with
+whatever bounds the caller gave: the later since, the earlier until. Both bounds
+are inclusive, which is what makes the translation exact rather than an
+approximation of the prefix match it replaces. A month that does not read as
+`YYYY-MM` falls through to that prefix match, which is where a month YNAB would
+have rejected already ended up.
+
+That one-year default is YNAB's own and it is documented only in their OpenAPI
+spec — the SDK's generated code carries no parameter descriptions at all — so it
+is stated where the model will read it: `since_date` says what omitting it
+costs, and the tool describes an unfiltered call as returning the last year
+rather than the plan's whole history.
+
+`getTransactionsByType` is reached when `type` is the only filter given. The SDK
+implements it as `getTransactions(planId, undefined, undefined, type)` — same
+request, same response — so calling it names the endpoint YNAB documents for
+that query rather than changing what happens.
+
+**One output schema covers both response shapes.** `subtransactions` belongs to
+`TransactionDetail`, `type` and `parent_transaction_id` to `HybridTransaction`,
+so all three are optional, and `category_name` admits null because
+`TransactionDetail` types it that way. Null never actually arrives — the SDK's
+`FromJSON` mappers turn every null into `undefined` — but the schema follows the
+types rather than the observed data, which is the safe direction. The mapper
+names those two SDK types through `import type`, which `verbatimModuleSyntax`
+erases entirely: no module is imported at runtime, and `client.ts` is still the
+only place the SDK is reached.
+
+**Deleted transactions are not filtered out, and `deleted` is reported only when
+it is true.** YNAB returns a deleted row only to a delta request and this server
+sends no `last_knowledge_of_server` yet, so the field is `false` on every row
+these endpoints return today and a filter here would be policy that never runs.
+When ENG-34 turns deltas on, a deleted row is the only way the model learns a
+transaction went away, and dropping it would be exactly wrong.
+
+`amount_currency` is dropped with the rest of the `_currency` companions, and
+three more fields go on the way out: `import_payee_name` and
+`import_payee_name_original`, because `payee_name` already carries the name
+YNAB resolved, and a line's `transaction_id`, which repeats the id of the row
+it is nested inside. On the highest-volume tool in the server those are tokens
+spent saying nothing.
+
+`since_date` and `until_date` are shaped `YYYY-MM-DD` rather than left as bare
+strings, because `month` beside them takes the literal `current` and a model
+trying the same on a date bound should be told so without spending one of 200
+requests to find out. The check is a shape and not a calendar: `z.iso.date()`
+would inline a 250-character regex into every `tools/list`.
 ### Plan discovery
 
 `list_plans` is where a model gets a `plan_id`, so its payload stays
@@ -380,8 +469,9 @@ them. That is as specific as the API allows.
 
 ### Omitted tool arguments
 
-`arguments` is optional on `tools/call`, and every tool here has all-optional
-arguments, so `{"name": "list_plans"}` with no `arguments` is a legal request. The
+`arguments` is optional on `tools/call`, and several tools here take no required
+argument at all, so `{"name": "list_plans"}` with no `arguments` is a legal
+request. The
 SDK at 1.30.0 parses `params.arguments` straight against the tool's schema, so
 `undefined` fails validation and the call errors —
 [#400](https://github.com/modelcontextprotocol/typescript-sdk/issues/400), which
