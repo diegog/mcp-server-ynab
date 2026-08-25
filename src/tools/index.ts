@@ -3,9 +3,11 @@ import { getTransaction } from "./get-transaction.ts";
 import { getUser } from "./get-user.ts";
 import { listAccounts } from "./list-accounts.ts";
 import { listCategories } from "./list-categories.ts";
+import { listMoneyMovements } from "./list-money-movements.ts";
 import { listMonths } from "./list-months.ts";
 import { listPayees } from "./list-payees.ts";
 import { listPlans } from "./list-plans.ts";
+import { listScheduledTransactions } from "./list-scheduled-transactions.ts";
 import { listTransactions } from "./list-transactions.ts";
 import type { AnyToolDefinition } from "./registry.ts";
 
@@ -16,8 +18,10 @@ export const TOOLS: readonly AnyToolDefinition[] = [
   getUser,
   listAccounts,
   listCategories,
+  listMoneyMovements,
   listMonths,
   listPayees,
   listPlans,
+  listScheduledTransactions,
   listTransactions,
 ];

@@ -499,6 +499,84 @@ model's context, and once deltas land, reporting what vanished is that layer's
 job. A blank `month` or id counts as absent for the reason it does in
 `resolvePlanId`: the alternative is asking YNAB for a record named `""`.
 
+### Scheduled transactions and money movements
+
+`list_scheduled_transactions` folds `getScheduledTransactionById` into the list
+rather than adding a second tool: passing `scheduled_transaction_id` returns a
+one-element `scheduled_transactions` array, so the model reads one shape whichever
+way it asked. `frequency` is a `z.string()` naming its thirteen values in
+`.describe()` rather than a `z.enum()`, for the same reason ids are bare strings —
+YNAB adds values without a major version, and a schema stricter than the API turns
+a working read into a tool error.
+
+**Deleted scheduled transactions never arrive.** YNAB returns them only to a
+delta request, which nothing here makes yet (ENG-34), so the output description
+says they are omitted rather than flagged: a model told they come back marked
+`deleted` would read their absence as proof that nothing had been deleted. The
+field itself stays in the shape, since it is what deltas will use once ENG-34
+lands.
+
+`list_money_movements` covers four endpoints on two independent axes: `month`
+picks the `ByMonth` variant, `group_by_movement_group` picks the `Groups` variant,
+and both together pick `getMoneyMovementGroupsByMonth`. There is no by-id endpoint
+for a movement, so the tool takes no subject id.
+
+**A blank `month` is no month; a blank id is a mistake.** `month` is a filter,
+so `""` drops it and the whole plan is listed, the way a blank `plan_id` falls
+through in `src/client.ts`. Routing it to the `ByMonth` variant instead would
+ask for `/months//money_movements` and answer a perfectly clear request with a
+404. A blank `scheduled_transaction_id` is the opposite case: it names the
+subject of the call, and widening "this one" into "all of them" answers a
+question nobody asked. It goes to YNAB as passed and comes back as a not-found
+quoting the empty id, which is the reply that tells the model what it did.
+
+**A group is not a container.** `MoneyMovementGroup` carries only `id`,
+`group_created_at`, `month`, `note` and `performed_by_user_id`: no category ids, no
+amount, and no nested movements. Grouped and ungrouped answer two different
+questions — who moved money and when, against what moved where — rather than a
+summary and its detail, which is why the output has a key per shape instead of one
+list.
+
+**Resolving category names is a second request, taken deliberately.** A movement
+names categories only by id, and an audit trail that needs a second lookup before
+anyone can read it does not answer the question it exists for. So the ungrouped
+variants fetch the plan's categories once per call, concurrently with the
+movements, and join in memory — never a lookup per movement. The second request
+is a deliberate exception to the rate-limit rule rather than an oversight, and
+not a regression either: a model handed bare ids spends it itself, often more
+than once. The grouped variants skip it, having no ids to resolve. The join also
+fails loudly rather than degrading, because names missing from some movements and
+names missing because the category request failed look identical from the
+model's side.
+
+**An unresolved category is silence, not a failure.** Both `from_category_id` and
+`to_category_id` are optional — money arriving from Ready to Assign has no
+from-category — and an id can name a category the flattened list no longer
+carries. Either way the `_name` field is absent and the raw id stays beside it, so
+the model can see what it was given. Because the tool resolves to names rather than
+returning categories, the shared category shape anticipated above is not needed
+here.
+
+**Every row is built field by field, never spread.** Both tools drop YNAB's
+`amount_currency` companion, which the read surface reports nowhere: it is the
+milliunit integer divided by a thousand, and a third spelling of the same number
+on every row of a long list is context paid for twice. Taking it out of the
+output schema alone would not have taken it out of the payload. The registry
+serialises whatever a handler returns into the text content block before
+anything is validated against the schema, so a field the schema does not declare
+still reaches the model and still costs the tokens it costs — against a
+pass-through, the schema documents the payload rather than deciding it.
+`toScheduledTransaction`, `toMoneyMovement` and their two companions name every
+field instead, so what the schema promises and what is sent are one list, and a
+field YNAB adds later arrives only once someone adds it here. Restoring the
+spread would put `amount_currency` back and nothing would fail.
+`toMoneyMovementGroup` has no companion field to drop and exists anyway, so the
+rule belongs to the tools rather than to the paths that happened to need it.
+
+The mappers name four SDK models through `import type`, which
+`verbatimModuleSyntax` erases outright: no module is imported at runtime, and
+`src/client.ts` is still the only place the SDK is reached.
+
 ### Money on the write path
 
 Every money argument on a write tool is a **decimal amount in the plan's
