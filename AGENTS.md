@@ -29,7 +29,8 @@ Conventions:
 
 - Every change should map to an `ENG-` issue. If there isn't one, say so before
   writing code rather than silently widening scope.
-- Branch names come from Linear: `diego/eng-NN-short-title`.
+- Branch names are `eng-NN-short-title`. Linear's suggested branch name
+  carries a `diego/` prefix; drop it.
 - Reference the issue in the commit body (`ENG-20`), so Linear links the work.
 - If an issue's "Done when" can't be met as written, flag it — don't quietly
   redefine it.
@@ -126,8 +127,12 @@ anchors; use `api.ynab.com`.
 ## Layout
 
 ```
-src/index.ts    entrypoint: builds the server, connects stdio transport
-src/client.ts   the only place `ynab` is imported: auth + plan resolution
+src/index.ts            entrypoint: reads the environment, connects stdio transport
+src/server.ts           builds the McpServer and registers every tool
+src/client.ts           the only place `ynab` is imported: auth + plan resolution
+src/tools/registry.ts   the tool shape, and the one adapter onto the MCP SDK
+src/tools/index.ts      every tool the server serves
+src/tools/<tool>.ts     one file per tool, named after it
 ```
 
 The tool layer stays transport-agnostic, so an HTTP transport can be added later
@@ -162,6 +167,74 @@ usable — deliberately left out of the chain rather than overlooked.
 env var set to the empty string, falls through to the next fallback rather than
 becoming a request for a plan named `""`.
 
+### The tool registry
+
+`src/tools/registry.ts` is the only module that knows tools are served over MCP.
+A `ToolDefinition` names itself, carries zod schemas for its arguments and its
+result, states its four behaviour hints, and exposes a handler taking
+`(args, { client })` and returning **plain data**. Nothing in a tool file mentions
+JSON-RPC, stdio, or `CallToolResult`, so adding a Streamable HTTP transport later
+touches this one module and no tool.
+
+`defineTool` is an identity function. Its only job is to infer `Input` and
+`Output` so a handler gets typed arguments without restating its schemas.
+
+**All four annotations are required**, not optional as in the SDK's
+`ToolAnnotations`. `destructiveHint` and `idempotentHint` are only meaningful when
+`readOnlyHint` is false, but requiring them means no tool can reach M3 without
+someone having stated its safety posture in writing. ENG-30 fixes the values each
+kind of write tool must carry.
+
+**`openWorldHint` is `false` throughout.** The tools reach an external service,
+but their domain of interaction is closed and enumerable: the token holder's own
+plans, accounts, and transactions. That is the distinction the hint draws — a web
+search is open, a database is not.
+
+**Handlers return data; the registry builds the result.** A tool with an
+`outputSchema` must return `structuredContent`, and the spec asks it to repeat the
+same payload as a serialized JSON text block for clients that only read `content`.
+Doing that in the registry is what keeps it true of every tool. The text block is
+compact JSON, not indented — with ~25 tools returning transaction lists, the
+whitespace is real tokens in the model's context.
+
+**Output schemas stay as loose as YNAB's own guarantee.** `structuredContent` is
+validated against the `outputSchema` before it is returned, so a schema stricter
+than the API turns a working read into a tool error. Ids are `z.string()`, not
+`z.uuid()`, for exactly that reason: describe the shape in `.describe()`, constrain
+only what YNAB actually promises.
+
+**Ordering is by name, in the registry, not by hand.** `tools/list` returns tools
+in registration order, and a stable order across restarts is what lets a client
+cache the prompt prefix it builds from them. Sorting means no one can perturb it
+by editing `TOOLS`, and `byName` compares codepoints rather than using
+`localeCompare`, which varies with the host locale.
+
+Tool names are snake_case with no prefix. The spec allows `[A-Za-z0-9_.-]` and
+blesses dot-namespacing, but namespacing across servers is the client's job.
+
+### Omitted tool arguments
+
+`arguments` is optional on `tools/call`, and every tool here has all-optional
+arguments, so `{"name": "list_plans"}` with no `arguments` is a legal request. The
+SDK at 1.30.0 parses `params.arguments` straight against the tool's schema, so
+`undefined` fails validation and the call errors —
+[#400](https://github.com/modelcontextprotocol/typescript-sdk/issues/400), which
+real clients hit. It is fixed on `main` by
+[#1404](https://github.com/modelcontextprotocol/typescript-sdk/pull/1404) but was
+never backported to the 1.x line
+([#1869](https://github.com/modelcontextprotocol/typescript-sdk/issues/1869)).
+
+`connect()` in `src/server.ts` wraps the transport's `onmessage` to default
+`params.arguments` to `{}`. **Always connect through it**, never `server.connect`
+directly, or the harness will pass where a real client fails. Delete it, and this
+section, when the SDK ships the fix — check on the next bump (ENG-38).
+
+The same release should be checked for the schema dialect. ENG-22 asked for
+JSON Schema 2020-12; the SDK hard-codes `$schema` to draft-07 for zod v4 schemas
+and offers no way to change it. Both drafts are explicitly allowed by the spec,
+and for our schemas the two are byte-identical apart from that one string, so this
+is cosmetic — but it is a deviation from the ticket, not an oversight.
+
 ### Startup
 
 `main()` builds the client *before* connecting the transport, so a missing token
@@ -173,9 +246,7 @@ a stack trace would only bury it. Everything else still prints as `fatal:` with
 its stack. The startup line on stderr names the resolved default plan, because
 that is what every tool call omitting `plan_id` will use.
 
-`declareToolsCapability()` registers a placeholder tool and immediately removes
-it. McpServer wires the `tools/list` and `tools/call` handlers lazily, on first
-`registerTool`; with an empty registry it would answer `tools/list` with `-32601`
-and advertise no capability, so a client could not tell an empty server from a
-broken one. `remove()` drops the entry but leaves the handlers in place, and
-`tools/list` then returns `[]`. Delete it once real tools register (ENG-22).
+`createServer` reads nothing from the environment and attaches no transport, so
+the test harness (ENG-35) can build a server over an in-memory transport with a
+faked `YnabClient`. `index.ts` holds everything that only makes sense in a real
+process: reading the environment, stdio, and exiting non-zero.
