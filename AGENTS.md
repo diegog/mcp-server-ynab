@@ -381,6 +381,71 @@ count and left to its own list tool. Those counts are of live records only:
 deleted records come back solely on delta requests, which nothing makes yet
 (ENG-34).
 
+### Accounts and categories
+
+`list_accounts` and `list_categories` are the lookup tools the write surface
+depends on: they turn a name the user said into an id a write tool takes. Each
+answers both the whole-plan question and the by-id one, and returns an array
+either way, so a caller that already has an id does not meet a second shape.
+`categorySchema` and `accountSchema` are exported for the later tools that
+return the same records, which is the lifting the "Shared tool arguments"
+section defers.
+
+**Categories come back flat.** `getCategories` nests them inside their groups,
+which is presentation structure: a model looking for "groceries" has to walk
+it, and one row per category naming its group is both smaller and easier to
+search. Flattening destroys what the group said about itself, so each row
+carries `group_name` and `group_hidden`. A hidden group hides its categories
+in YNAB whatever their own `hidden` says, and folding the two into one flag
+would state the category's own hiddenness wrongly. The group's `deleted` is
+not carried: deleted records only appear in delta requests, which are ENG-34.
+
+**`group_name` is best-effort, and the schema says so.** Only the whole-plan
+listing wraps a category in its group. `getCategoryById`,
+`getMonthCategoryById` and a month's own category list all return the category
+alone, so those three paths fill `group_name` from YNAB's own optional
+`category_group_name` when the response carries it, omit it otherwise, and
+never carry `group_hidden` at all — resolving either properly would cost a
+second request out of 200 an hour for a field the caller usually already has.
+Both descriptions qualify on the whole plan being listed rather than on
+listing, because the month path is a listing too and carries no group.
+
+**Blank counts as absent for the filter arguments too.** `resolvePlanId`
+already trims `plan_id` so that `""` falls through rather than becoming a
+request for a plan named `""`; `supplied` in `arguments.ts` applies the same
+rule to `account_id`, `category_id` and `month`. A model that fills an
+optional filter with the empty string means "no filter", and dispatching the
+by-id call on it would ask YNAB for a path with an empty segment, whose
+answer is not the listing the model wanted whatever it turns out to be.
+
+**Nothing is filtered.** Hidden categories, closed accounts and YNAB's
+internal "Ready to Assign" are all returned, flagged by `hidden`, `closed` and
+`internal`. A default filter is invisible to the model, which would then
+describe a plan that does not match the one on the user's screen. A flag it
+can read is not.
+
+**`month` alone means that month's categories.** ENG-27 paired `month` with
+`category_id` and left it undefined on its own; treating it as the current
+month would silently ignore an argument the model chose to pass.
+`months.getPlanMonth` returns every category priced for the month in a single
+request, so all four argument combinations cost one request and `month` means
+one thing throughout. What it does not return is the groups, which is the
+whole reason the two group columns are qualified the way they are above.
+
+**What is left out.** `deleted` on both models is false in every response we
+can ask for. The account debt maps are keyed by month, have no formatted
+companion, and mean nothing on a non-loan account. Of the goal surface only
+the fields that state a number or a state on their own are exposed —
+`goal_cadence`, `goal_cadence_frequency` and `goal_day` need YNAB's cadence
+table to read at all, which is not worth carrying down fifty rows of a
+listing. Amounts are YNAB's milliunit integer and its `_formatted` string; the
+`_currency` decimal is a third spelling of the same number in every row.
+
+**The SDK's model types are reached through `YnabApi`, never imported.**
+`Awaited<ReturnType<YnabApi["accounts"]["getAccountById"]>>["data"]["account"]`
+is an ugly way to say `Account`, and it is what keeps `src/client.ts` the only
+module in the tree that names `ynab`.
+
 ### Money on the write path
 
 Every money argument on a write tool is a **decimal amount in the plan's
