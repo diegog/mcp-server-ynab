@@ -10,6 +10,7 @@ import { listPlans } from "./list-plans.ts";
 import { listScheduledTransactions } from "./list-scheduled-transactions.ts";
 import { listTransactions } from "./list-transactions.ts";
 import type { AnyToolDefinition } from "./registry.ts";
+import { setCategoryBudget } from "./set-category-budget.ts";
 
 /** Every tool the server can serve. Order here is irrelevant — the registry sorts. */
 export const TOOLS: readonly AnyToolDefinition[] = [
@@ -24,4 +25,5 @@ export const TOOLS: readonly AnyToolDefinition[] = [
   listPlans,
   listScheduledTransactions,
   listTransactions,
+  setCategoryBudget,
 ];

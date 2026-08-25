@@ -728,6 +728,63 @@ amount changes, a Credit Card Payment `category_id` — comes back 200 with noth
 done, so `errors.ts` never sees it. Only a tool can refuse those, and each write
 tool has to.
 
+### Assigning money to a month
+
+`set_category_budget` is the write that gets used daily, and its body is one
+field: `SaveMonthCategory` has exactly one property and the SDK's serialiser
+emits only that key. A decimal comes in and `toMilliunits` converts it at the
+boundary. The 200 hands back the whole ~40-field `Category` for a call that set
+one integer, which `categorySchema` trims to the same shape `list_categories`
+reports — `toCategory` is exported for it, and fills `group_name` only when YNAB
+names the group on the category, which a single-category response usually does
+not.
+
+**Replace, not add — and YNAB never actually says so.** Grep the 1.86.0 spec for
+"replac" and the only hit is about goal cadence. The shape is what decides it:
+`budgeted` carries the same description as the `budgeted` the read surface
+reports, there is no delta or increment field anywhere in the API, and the
+response echoes the resulting absolute amount. So the tool states the replace
+semantics itself, and tells a model that wants "another 50" to read the current
+amount and send the total.
+
+**`month` is required here, and checked before a request is spent.** Everywhere
+else `monthArgument` bakes in `.optional()`; this tool `.unwrap()`s it so the
+wording stays shared while the argument becomes mandatory. Defaulting a
+money-moving write to the current month would be a silent choice about where
+money lands. The regex then admits only the first of a month or `"current"`,
+because whether YNAB coerces a mid-month date to its month, rejects it, or does
+something else is undocumented and `CategoriesApi` interpolates the value into
+the URL untouched. This is the one argument in the write surface whose wrong
+answer is money in the wrong month rather than an error message, so it is a
+`.regex()` on the schema — visible in `tools/list` and enforced before the
+handler runs — rather than a check in the handler.
+
+**Verifying an assignment is not as easy as it looks.** `getCategories` reports
+the *current* month's amounts whatever month was asked about, so `list_categories`
+cannot confirm an assignment to any other month, and `list_categories` with a
+`category_id` and a `month` routes to `getMonthCategoryById`, whose own YNAB
+description contradicts its summary and claims current-month amounts.
+`list_categories` with `month` alone routes to `getPlanMonth`, and
+`MonthDetail.categories` is the only place in the spec that binds category
+amounts to the month asked for. That is the verification path.
+
+**There is no `move_money` tool and there should not be one.** The Money
+Movements group is four GETs; a move is two `set_category_budget` calls, lowering
+one category and raising another, and it is therefore not atomic. A tool that
+hid that would report a success where money can be sitting in Ready to Assign
+instead of at its destination, so the tool description says it plainly and leaves
+the two calls where the model can watch either fail. Moving money back to Ready
+to Assign is a single call, `to_be_budgeted` being derived with no write endpoint
+of its own.
+
+**Three things here are still unverified against a live plan** and none of them
+can be settled from the spec: whether assigning to a month that does not yet
+exist in the plan works, whether `getMonthCategoryById` behaves as its summary
+says or as its description does, and whether an API-issued PATCH produces a
+`MoneyMovement` row — which decides whether `list_money_movements` can show the
+model its own moves. The first is a first-week request ("budget for next month"),
+so it is the one to check first.
+
 ### Error mapping
 
 `src/errors.ts` turns whatever a handler threw into one sentence of advice.
