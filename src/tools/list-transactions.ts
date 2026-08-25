@@ -1,11 +1,14 @@
-import type { HybridTransaction, TransactionDetail } from "ynab";
 import { z } from "zod";
 import type { YnabClient } from "../client.ts";
-import { CURRENT_MONTH, idArgument, monthArgument, planIdArgument } from "./arguments.ts";
+import {
+  CURRENT_MONTH,
+  dateShape,
+  idArgument,
+  monthArgument,
+  planIdArgument,
+} from "./arguments.ts";
 import { defineTool } from "./registry.ts";
-
-/** A row of any transaction query: YNAB returns two shapes and this is either. */
-type YnabTransaction = TransactionDetail | HybridTransaction;
+import { toTransaction, transactionSchema, type YnabTransaction } from "./shapes.ts";
 
 /** The transaction states YNAB can filter on. */
 const TYPES = ["uncategorized", "unapproved"] as const;
@@ -43,122 +46,9 @@ export type TransactionQuery =
   | (QueryFilters & { readonly method: "getTransactions" | "getTransactionsByType" })
   | (QueryFilters & { readonly method: ScopedMethod; readonly scope: string });
 
-/** One line of a split transaction. */
-const subtransactionSchema = z.object({
-  id: z.string().describe("Id of this line."),
-  amount: z
-    .number()
-    .describe("Amount in milliunits, where 1000 is one currency unit. Outflows are negative."),
-  amount_formatted: z.string().optional().describe("`amount` in the plan's currency format."),
-  memo: z.string().optional().describe("Free text on this line."),
-  payee_id: z.string().optional().describe("Payee of this line, when it differs from the parent."),
-  payee_name: z.string().nullable().optional().describe("Name of that payee."),
-  category_id: z.string().optional().describe("Category this line is assigned to."),
-  category_name: z.string().nullable().optional().describe("Name of that category."),
-  transfer_account_id: z.string().optional().describe("If this line is a transfer, its account."),
-  transfer_transaction_id: z
-    .string()
-    .optional()
-    .describe("If this line is a transfer, the transaction on the other side."),
-  deleted: z.boolean().optional().describe("Present and true only if this line was deleted."),
-});
-
-/** A transaction, in the one shape every transaction query here reports. */
-export const transactionSchema = z.object({
-  id: z.string().describe("Id of the transaction."),
-  date: z.string().describe("Date the transaction falls on, as ISO `YYYY-MM-DD`."),
-  amount: z
-    .number()
-    .describe(
-      "Amount in milliunits, where 1000 is one currency unit. Outflows are negative and " +
-        "inflows positive.",
-    ),
-  amount_formatted: z
-    .string()
-    .optional()
-    .describe("`amount` in the plan's currency format, ready to show the user."),
-  memo: z.string().optional().describe("Free text on the transaction."),
-  cleared: z
-    .string()
-    .describe(
-      "Whether the transaction has cleared the account: `cleared`, `uncleared` or `reconciled`.",
-    ),
-  approved: z
-    .boolean()
-    .describe("Whether the transaction is approved. Imported transactions start unapproved."),
-  flag_color: z
-    .string()
-    .nullable()
-    .optional()
-    .describe("Flag on the transaction: `red`, `orange`, `yellow`, `green`, `blue` or `purple`."),
-  flag_name: z.string().optional().describe("The plan's own name for that flag colour."),
-  account_id: z.string().describe("Account the transaction is in."),
-  account_name: z.string().describe("Name of that account."),
-  payee_id: z.string().optional().describe("Payee of the transaction."),
-  payee_name: z.string().nullable().optional().describe("Name of that payee."),
-  category_id: z
-    .string()
-    .optional()
-    .describe("Category of the transaction. Absent on a transfer, and on a split."),
-  category_name: z
-    .string()
-    .nullable()
-    .optional()
-    .describe("Name of that category, or `Split` when the categories are on the lines below."),
-  transfer_account_id: z.string().optional().describe("If a transfer, the account money moved to."),
-  transfer_transaction_id: z
-    .string()
-    .optional()
-    .describe("If a transfer, the transaction on the other side of it."),
-  matched_transaction_id: z
-    .string()
-    .optional()
-    .describe("The imported transaction this one was matched against, if any."),
-  import_id: z
-    .string()
-    .optional()
-    .describe(
-      "Id the transaction was imported under, unique within its account. Absent when it was " +
-        "entered by hand.",
-    ),
-  debt_transaction_type: z
-    .string()
-    .nullable()
-    .optional()
-    .describe(
-      "On a debt or loan account, what the transaction does: `payment`, `refund`, `fee`, " +
-        "`interest`, `escrow`, `balanceAdjustment`, `credit` or `charge`.",
-    ),
-  deleted: z.boolean().optional().describe("Present and true only if the transaction was deleted."),
-  type: z
-    .string()
-    .optional()
-    .describe(
-      "`transaction` or `subtransaction`. Present only when filtering by category or payee, " +
-        "which return the lines of a split as rows in their own right.",
-    ),
-  parent_transaction_id: z
-    .string()
-    .nullable()
-    .optional()
-    .describe("On a `subtransaction` row, the split transaction the line belongs to."),
-  subtransactions: z
-    .array(subtransactionSchema)
-    .optional()
-    .describe(
-      "The lines of a split transaction, empty when it is not a split. Absent when filtering " +
-        "by category or payee.",
-    ),
-});
-
-/** A transaction as this server reports it. */
-export type Transaction = z.infer<typeof transactionSchema>;
-
 /** An ISO date bound. Shaped enough to catch a date that is not one at all. */
 function dateArgument(meaning: string, omitted: string): z.ZodOptional<z.ZodString> {
-  return z
-    .string()
-    .regex(/^\d{4}-\d{2}-\d{2}$/, "Dates are ISO `YYYY-MM-DD`, as in 2026-08-14.")
+  return dateShape()
     .describe(`${meaning} An ISO date, written as 2026-08-14. ${omitted}`)
     .optional();
 }
@@ -330,54 +220,6 @@ function monthBounds(month: string): { since: string; until: string } | undefine
   if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(prefix) || prefix.startsWith("00")) return undefined;
   const last = new Date(Date.UTC(Number(prefix.slice(0, 4)), Number(prefix.slice(5)), 0));
   return { since: `${prefix}-01`, until: last.toISOString().slice(0, 10) };
-}
-
-/** One row of either response shape, as this server reports it. */
-export function toTransaction(row: YnabTransaction): Transaction {
-  return {
-    id: row.id,
-    date: row.date,
-    amount: row.amount,
-    amount_formatted: row.amount_formatted,
-    memo: row.memo,
-    cleared: row.cleared,
-    approved: row.approved,
-    flag_color: row.flag_color,
-    flag_name: row.flag_name,
-    account_id: row.account_id,
-    account_name: row.account_name,
-    payee_id: row.payee_id,
-    payee_name: row.payee_name,
-    category_id: row.category_id,
-    category_name: row.category_name,
-    transfer_account_id: row.transfer_account_id,
-    transfer_transaction_id: row.transfer_transaction_id,
-    matched_transaction_id: row.matched_transaction_id,
-    import_id: row.import_id,
-    debt_transaction_type: row.debt_transaction_type,
-    type: "type" in row ? row.type : undefined,
-    parent_transaction_id: "parent_transaction_id" in row ? row.parent_transaction_id : undefined,
-    subtransactions:
-      "subtransactions" in row ? row.subtransactions.map(toSubtransaction) : undefined,
-    ...(row.deleted ? { deleted: true } : {}),
-  };
-}
-
-/** One line of a split, dropping the parent id it is already nested under. */
-function toSubtransaction(line: TransactionDetail["subtransactions"][number]) {
-  return {
-    id: line.id,
-    amount: line.amount,
-    amount_formatted: line.amount_formatted,
-    memo: line.memo,
-    payee_id: line.payee_id,
-    payee_name: line.payee_name,
-    category_id: line.category_id,
-    category_name: line.category_name,
-    transfer_account_id: line.transfer_account_id,
-    transfer_transaction_id: line.transfer_transaction_id,
-    ...(line.deleted ? { deleted: true } : {}),
-  };
 }
 
 /** Blank counts as absent, as it does in `resolvePlanId`. */

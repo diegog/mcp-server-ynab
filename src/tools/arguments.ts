@@ -54,6 +54,15 @@ export function supplied(value: string | undefined): string | undefined {
 }
 
 /**
+ * The shape of an ISO date, shared by the date bounds on the read surface and
+ * the dates the write surface takes. A shape and not a calendar: `z.iso.date()`
+ * would inline a 250-character regex into every `tools/list`.
+ */
+export function dateShape(): z.ZodString {
+  return z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Dates are ISO `YYYY-MM-DD`, as in 2026-08-14.");
+}
+
+/**
  * An id of some other YNAB record. `tool` is the tool that lists them. Unlike
  * the two above this is required, since an id is a filter on some tools and the
  * subject of others — add `.optional()` where it is a filter.
