@@ -785,6 +785,66 @@ says or as its description does, and whether an API-issued PATCH produces a
 model its own moves. The first is a first-week request ("budget for next month"),
 so it is the one to check first.
 
+### Category structure
+
+The structural half of the Categories group: create and rename categories and
+their groups, and set targets. Assigning money is `set_category_budget` and lives
+in the section above.
+
+**`goal_frequency` is left out, deliberately.** Spec v1.86.0 added it to
+`SaveCategory` — a recurring NEED target that repeats at `monthly`, `weekly` or
+`yearly`. The vendored SDK 4.5.0 was generated from spec 1.85.0, and
+`NewCategoryToJSONTyped` / `ExistingCategoryToJSONTyped` return a hard-coded
+six-key object, so a `goal_frequency` set on the model is **dropped in silence** —
+no error, no warning, nothing rejected. Exposing an argument that vanishes on the
+wire is worse than not having one: the model would report a cadence it did not
+set. Taking it would mean hand-building the request body, and `src/client.ts`
+would stop being the only module that knows the SDK's shapes. So it is absent
+until the SDK is regenerated, and that is one more thing to check at ENG-38.
+
+**`goal_target: null` clears a target, and it is offered.** That sentence is in
+the live spec and missing from the SDK's JSDoc, and it is the one place on this
+path where `null` and "omitted" must mean different things. The SDK's generator
+flattened `allOf` and dropped the `| null` from `NewCategory` and `ExistingCategory`
+while keeping it on `SaveCategory`, so the documented way to clear a target does
+not typecheck against the model the SDK actually sends. The alternatives were a
+hand-built body or no clearing at all — the first breaks the `client.ts`
+invariant, the second leaves a tool that can set a target but never remove one.
+So the null is asserted past a type that never allowed it, at one call site, with
+a comment. The serialiser forwards it correctly:
+`PatchCategoryWrapperToJSON({category: {goal_target: null}})` is
+`{"category":{"goal_target":null}}`.
+
+**Both bodies carry only the keys the caller named.** `exactOptionalPropertyTypes`
+forces the question and the answer is the right one anyway: an update that lists
+every field is an update that says something about every field, and here the
+difference between omitting a field and clearing it is the whole subtlety. A
+rename sends `{"category":{"name":"Vet"}}` and nothing else.
+
+**`update_category` refuses an update that names no field.** `{"category": {}}`
+is schema-legal and YNAB does not say what it does with it, so sending one spends
+a request to find out. The refusal names the six fields it will take, and points
+at `set_category_budget` — a model reaching for `update_category` to change what a
+category has budgeted is the mistake worth catching by name.
+
+**A group's name is all there is.** `SaveCategoryGroup` has one property, on both
+the POST and the PATCH, so `create_category_group` and `update_category_group`
+take a name and nothing else. Category groups also have **no GET endpoints at
+all** — they are readable only as the wrappers inside `getCategories` or in the
+plan export — so a create response is the only direct view of a group the API
+will ever return, and `categoryGroupSchema` lives beside that create rather than
+in a list tool that cannot exist. Group ids for an update come from
+`list_categories`, whose rows carry `group_name`.
+
+**Nothing here can hide or delete anything.** `SaveCategory` and
+`SaveCategoryGroup` expose no `hidden` and no `deleted`, and the whole API has
+exactly two DELETE operations, both elsewhere. Renaming a group and re-filing a
+category with `category_group_id` is the entire extent of destructive-ish
+control, and every description says so, because a model that assumes otherwise
+will promise the user a cleanup it cannot perform. ENG-36 should say the same in
+the README. "An internal category group may not be specified" is the only
+documented internal-group rule anywhere, and it governs `category_group_id` on a
+category rather than the group endpoints themselves.
 ### Accounts and payees on the write path
 
 Three one-shot creates with almost no arguments, and one of them is the only
