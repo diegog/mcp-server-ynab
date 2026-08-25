@@ -75,7 +75,13 @@ export function registerTools(
         try {
           return toResult(await tool.handler(args, context));
         } catch (error) {
-          return toErrorResult(describeFailure(error, { tool: tool.name, args }));
+          return toErrorResult(
+            describeFailure(error, {
+              tool: tool.name,
+              args,
+              writes: !tool.annotations.readOnlyHint,
+            }),
+          );
         }
       },
     );

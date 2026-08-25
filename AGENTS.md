@@ -127,15 +127,17 @@ anchors; use `api.ynab.com`.
 ## Layout
 
 ```
-src/index.ts            entrypoint: reads the environment and argv, connects stdio
-src/server.ts           builds the McpServer and registers the tools it serves
-src/client.ts           the only place `ynab` is imported: auth + plan resolution
-src/errors.ts           maps a failed call to text the model can recover from
-src/money.ts            decimal amounts in, milliunits out, on the write path
-src/tools/registry.ts   the tool shape, and the one adapter onto the MCP SDK
-src/tools/arguments.ts  arguments more than one tool takes, described once
-src/tools/index.ts      every tool the server can serve
-src/tools/<tool>.ts     one file per tool, named after it
+src/index.ts                  entrypoint: reads the environment and argv, connects stdio
+src/server.ts                 builds the McpServer and registers the tools it serves
+src/client.ts                 the only place `ynab` is imported: auth + plan resolution
+src/errors.ts                 maps a failed call to text the model can recover from
+src/money.ts                  decimal amounts in, milliunits out, on the write path
+src/tools/registry.ts         the tool shape, and the one adapter onto the MCP SDK
+src/tools/arguments.ts        arguments more than one tool takes, described once
+src/tools/write-arguments.ts  the same, for the arguments only a write takes
+src/tools/shapes.ts           the records more than one tool file returns
+src/tools/index.ts            every tool the server can serve
+src/tools/<tool>.ts           one file per tool, named after it
 ```
 
 The tool layer stays transport-agnostic, so an HTTP transport can be added later
@@ -648,6 +650,83 @@ omitted.
 Three decimal places, not two: milliunits are what YNAB stores, and currencies
 with three decimal digits (KWD, BHD) use all of them. Capping at cents would
 quietly break those plans.
+
+### The write surface
+
+`src/tools/write-arguments.ts` is `arguments.ts` for the arguments only a write
+takes, and `src/tools/shapes.ts` holds the records more than one tool file
+returns. Both exist for the reason `arguments.ts` does: four tools take a
+transaction's field set and every write returns a record the read surface already
+describes, so left alone the write tools would arrive with five spellings of
+`payee_id` and two `transactionSchema`s.
+
+**Input enums are strict; output schemas stay as loose as ever.** The read
+surface makes `frequency` a `z.string()` because a schema stricter than YNAB
+turns a working read into a tool error. The write path inverts the trade: an
+invented value costs one of 200 requests and comes back as an opaque 400, so
+rejecting it locally is both cheaper and clearer. These are the same rule seen
+from two sides — never let our schema fail a call YNAB would have accepted, and
+never spend a request to learn something we already know. So `cleared`,
+`frequency` and the creatable account types are `z.enum`s going in and bare
+strings coming back.
+
+`flag_color` is the trap. YNAB's enum is the six colours plus `""` plus `null`,
+and the empty string and the null are the two documented ways to clear a flag —
+a `z.enum` of six colours rejects both. The account types are a growing
+allow-list, four in v1.80.0 and two more in v1.82.0 a week later, so that one is
+strict with a re-check owed on the next SDK bump (ENG-38).
+
+**The length caps are in the schema because they are nowhere else.** `memo` at
+500, a transaction's `payee_name` at 200, `import_id` at 36, a payee's own name
+at 500, a category group's at 50. All five are declared in YNAB's OpenAPI spec
+(v1.86.0) and dropped by the SDK's generated models, so without them the only way
+to find out a memo was too long is to spend a request being told 400.
+
+**`shapes.ts` is a move, not a rewrite.** `transactionSchema`, its subtransaction
+shape and `toTransaction` came out of `list-transactions.ts`; the scheduled pair
+came out of `list-scheduled-transactions.ts`, where the mapper was not exported at
+all. Every field, description and mapper body is unchanged, and `tools/list` is
+byte-identical either side of the move — a lift that also edits is a lift nobody
+can review. `categorySchema` and `accountSchema` stay where they are: both are
+already exported and already imported from their list tools, so moving them would
+churn the write branches in flight and buy nothing. When a third tool needs one,
+that is when it moves.
+
+**Every write result echoes the plan it acted on**, through `planIdResult()`.
+`resolvePlanId` falls back to `"last-used"`, which YNAB resolves per request
+against whichever plan was most recently opened in the app. On a read that is
+free. On a write, the `list_categories` that found an id and the
+`set_category_budget` that spends it can land on different plans — surfacing as a
+404 the model reads as a bad id, or, when the id exists in both, as a
+correct-looking write to the wrong plan. The handler already holds the resolved
+id; echoing it costs nothing, where recovering it afterwards costs a full plan
+export.
+
+**`server_knowledge` is dropped, deliberately.** Eleven of the sixteen write
+responses carry it, and it is a plan-wide counter and a free delta checkpoint, so
+ENG-34 will want it. Nothing reads it today, and a number the model cannot use is
+context spent for nothing.
+
+**A 400 on a write leads with YNAB's own `detail`.** It is the only failure most
+write endpoints document and it covers a dozen unrelated rules — a date more than
+five years out, a future date on a transaction, a split on a tracking account,
+editing the lines of a split that already exists, an internal category group, an
+over-length memo, an uncreatable account type — which YNAB discriminates nowhere
+but in `ErrorDetail.detail`. Read-shaped advice with the detail in a trailing
+parenthesis buries the one sentence that says what actually went wrong, so
+`writeRejected` in `errors.ts` puts it first. Which branch applies is decided
+from `annotations.readOnlyHint`, passed down by the registry, rather than from
+the tool's name.
+
+The same pass corrects the 409, which claimed an `import_id` is unique "within a
+plan". The spec says the same account — "A transaction on the same account with
+the same `import_id` already exists" — and `transactionSchema` already said
+account. That was a shipped bug from M2.
+
+Note what none of this reaches. The silent-ignore family — a split's date and
+amount changes, a Credit Card Payment `category_id` — comes back 200 with nothing
+done, so `errors.ts` never sees it. Only a tool can refuse those, and each write
+tool has to.
 
 ### Error mapping
 
