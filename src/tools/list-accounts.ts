@@ -106,7 +106,8 @@ export const listAccounts = defineTool({
   },
 });
 
-function toAccount(account: YnabAccount): z.infer<typeof accountSchema> {
+/** Rebuilt field by field; `create_account` reports the same shape. */
+export function toAccount(account: YnabAccount): z.infer<typeof accountSchema> {
   return {
     id: account.id,
     name: account.name,
