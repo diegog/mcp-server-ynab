@@ -2,6 +2,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import type { z } from "zod";
 import type { YnabClient } from "../client.ts";
+import { describeFailure } from "../errors.ts";
 
 /** Everything a handler gets besides its own arguments. */
 export interface ToolContext {
@@ -70,7 +71,13 @@ export function registerTools(
         outputSchema: tool.outputSchema,
         annotations: tool.annotations,
       },
-      async (args: Shaped<z.ZodRawShape>) => toResult(await tool.handler(args, context)),
+      async (args: Shaped<z.ZodRawShape>) => {
+        try {
+          return toResult(await tool.handler(args, context));
+        } catch (error) {
+          return toErrorResult(describeFailure(error, { tool: tool.name, args }));
+        }
+      },
     );
   }
 }
@@ -89,5 +96,16 @@ function toResult(data: Shaped<z.ZodRawShape>): CallToolResult {
   return {
     structuredContent: data,
     content: [{ type: "text", text: JSON.stringify(data) }],
+  };
+}
+
+/**
+ * A failure the model is meant to recover from, not a JSON-RPC error. No
+ * `structuredContent`: an error result is exempt from the output schema.
+ */
+function toErrorResult(message: string): CallToolResult {
+  return {
+    isError: true,
+    content: [{ type: "text", text: message }],
   };
 }

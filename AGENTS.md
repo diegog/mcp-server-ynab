@@ -130,6 +130,7 @@ anchors; use `api.ynab.com`.
 src/index.ts            entrypoint: reads the environment, connects stdio transport
 src/server.ts           builds the McpServer and registers every tool
 src/client.ts           the only place `ynab` is imported: auth + plan resolution
+src/errors.ts           maps a failed call to text the model can recover from
 src/tools/registry.ts   the tool shape, and the one adapter onto the MCP SDK
 src/tools/index.ts      every tool the server serves
 src/tools/<tool>.ts     one file per tool, named after it
@@ -211,6 +212,59 @@ by editing `TOOLS`, and `byName` compares codepoints rather than using
 
 Tool names are snake_case with no prefix. The spec allows `[A-Za-z0-9_.-]` and
 blesses dot-namespacing, but namespacing across servers is the client's job.
+
+### Error mapping
+
+`src/errors.ts` turns whatever a handler threw into one sentence of advice.
+`registerTools` wraps every handler in the `try` that calls it, so a tool file
+never handles an API failure and every tool gets the same treatment.
+
+**Failures are tool results, not JSON-RPC errors.** `isError: true` with text in
+`content`; clients feed that back to the model, which is the only path that can
+produce a recovery. An error result carries no `structuredContent` — the SDK
+skips output-schema validation when `isError` is set, so a failure does not have
+to satisfy a schema written for success.
+
+Note what this does *not* achieve: ENG-23 asked to reserve JSON-RPC errors for
+structural problems like an unknown tool, and `McpServer` makes that impossible.
+Its `tools/call` handler catches everything, `McpError` included, and returns it
+as `isError` — so "tool not found" and input-validation failures come back as
+tool results too. Bypassing it would mean giving up `registerTool`. Left as is.
+
+**Match on `error.id`, never `error.name`.** The SDK does not throw an `Error`
+subclass for a non-2xx: it throws the parsed response body itself, so the value
+is a plain `{error: {id, name, detail}}` object and `instanceof Error` is false.
+`asYnabFailure` is therefore a shape test. The `id` is the status with an
+optional sub-code (`403.1`), which `Number.parseInt` reduces to the status; the
+sub-codes are matched first, so a lapsed subscription reads differently from an
+expired trial. `name` is not reliable — a live 401 returns `unauthorized` where
+[the docs](https://api.ynab.com/#errors) say `not_authorized`.
+
+Because the SDK parses every body as JSON, a maintenance or proxy page arrives as
+a `SyntaxError`, and a dead connection as a bare `TypeError` from `fetch`. Both
+are mapped; anything left says plainly that it is a bug in the server.
+
+**The 429 message carries the rolling window.** A model that reads "rate limited"
+and nothing else retries immediately and burns what is left. The text states the
+200/hour allowance, that the window rolls rather than resetting, that a retry now
+cannot succeed, and that it should tell the user instead of looping. It cannot be
+more precise than that: YNAB stopped returning `X-Rate-Limit` on 429s in v1.73.0,
+and `new api(token)` takes only a token and a base URL, so there is no middleware
+seam to read response headers through anyway. If ENG-34 needs live quota, that
+seam has to be built first.
+
+**No token can leak into a message.** Not by discipline but by construction —
+`errors.ts` never receives the token, and `createClient` is the only thing that
+ever holds it. Keep it that way rather than adding scrubbing.
+
+`ToolError` is for failures this server raises deliberately, where the message is
+already written for the model; it passes through with only the tool name added.
+Read-only mode (ENG-30) is its first real user.
+
+**Not-found messages echo the ids that were passed.** YNAB says only that
+something was missing, never which id, so the registry hands `describeFailure`
+the raw arguments and the 400/404/409 paths list every `*_id` and `month` among
+them. That is as specific as the API allows.
 
 ### Omitted tool arguments
 
