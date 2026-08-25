@@ -68,9 +68,9 @@ stream and the client sees a parse error. All diagnostics go to `stderr`.
 
 **Milliunits.** YNAB amounts are integers where `1000` = one currency unit. Reads
 are covered by the SDK's `_formatted` / `_currency` fields; **writes are not**,
-and the failure mode is a transaction off by 1000×. Conversion on the write path
-is its own issue (ENG-24) — until it lands, don't hand-roll conversions in tool
-handlers.
+and the failure mode is a transaction off by 1000×. Write tools therefore take a
+decimal amount and convert it in `src/money.ts` — never by hand in a handler, and
+never with `amount * 1000`.
 
 **Writes are real.** Creating transactions and updating budgeted amounts mutate
 live financial records. There is no sandbox. Treat write tools accordingly:
@@ -131,6 +131,7 @@ src/index.ts            entrypoint: reads the environment, connects stdio transp
 src/server.ts           builds the McpServer and registers every tool
 src/client.ts           the only place `ynab` is imported: auth + plan resolution
 src/errors.ts           maps a failed call to text the model can recover from
+src/money.ts            decimal amounts in, milliunits out, on the write path
 src/tools/registry.ts   the tool shape, and the one adapter onto the MCP SDK
 src/tools/index.ts      every tool the server serves
 src/tools/<tool>.ts     one file per tool, named after it
@@ -212,6 +213,39 @@ by editing `TOOLS`, and `byName` compares codepoints rather than using
 
 Tool names are snake_case with no prefix. The spec allows `[A-Za-z0-9_.-]` and
 blesses dot-namespacing, but namespacing across servers is the client's job.
+
+### Money on the write path
+
+Every money argument on a write tool is a **decimal amount in the plan's
+currency**; `src/money.ts` converts it to milliunits at the handler boundary.
+Reads keep passing YNAB's own `_formatted` / `_currency` fields through, so
+nothing on that side does arithmetic.
+
+Two things had to be said in the schema, because neither is guessable and both
+fail silently. `moneyArgument` and `transactionAmountArgument` build the
+`z.number()` and own the wording, so no tool can phrase either one differently or
+forget it: the unit, with `123.93` spelled out against `123930`; and, on
+transactions only, that outflows are negative.
+
+**`toMilliunits` shifts digits, it does not multiply.** `123.93 * 1000` is
+`123930.00000000001` — rounding that away would work, but the same rounding is
+what turns a genuinely too-precise amount into a plausible one. Instead it takes
+the shortest decimal string that round-trips the double (which is what
+`Number.prototype.toString` returns), moves the point three places, and rejects
+the value if a non-zero digit would fall off the end. So the precision test is
+exact rather than a tolerance, and the rejection is honest.
+
+**Nothing is rounded, and nothing is defaulted.** A fourth decimal place is a
+mistake about what the amount is, and picking a neighbour for the model would
+write a number nobody chose to a real financial record. `toMilliunits` throws a
+`ToolError` naming the argument instead. For the same reason `undefined` passes
+straight through rather than becoming `0`: on an update, `args.amount ?? 0` would
+zero a real transaction, so the overload returns `undefined` and lets the field be
+omitted.
+
+Three decimal places, not two: milliunits are what YNAB stores, and currencies
+with three decimal digits (KWD, BHD) use all of them. Capping at cents would
+quietly break those plans.
 
 ### Error mapping
 
