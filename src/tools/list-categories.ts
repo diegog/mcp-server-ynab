@@ -181,7 +181,7 @@ export const listCategories = defineTool({
 });
 
 /** `group` is the enclosing group, which only the whole-plan listing has to give. */
-function toCategory(
+export function toCategory(
   category: YnabCategory,
   group?: YnabCategoryGroup,
 ): z.infer<typeof categorySchema> {
