@@ -197,3 +197,35 @@ export function accountTypeArgument(): typeof accountTypeSchema {
       "cannot be created here and have to be added in the YNAB app.",
   );
 }
+
+/** The name of a category. YNAB caps a group's name at 50 but not a category's. */
+export function categoryNameArgument(meaning: string): z.ZodString {
+  return z.string().describe(meaning);
+}
+
+/** Free text on a category, which is a different field from a transaction's memo. */
+export function categoryNoteArgument(meaning: string): z.ZodOptional<z.ZodString> {
+  return z.string().describe(meaning).optional();
+}
+
+/** The date a dated target is meant to be met by. */
+export function goalTargetDateArgument(): z.ZodOptional<z.ZodString> {
+  return dateShape()
+    .describe(
+      "Date the target should be met by, as 2026-12-01, which makes it a target-by-date rather " +
+        "than a monthly one. Omit it to leave any existing date alone.",
+    )
+    .optional();
+}
+
+/** Which of the two NEED-goal behaviours a target has. */
+export function goalNeedsWholeAmountArgument(): z.ZodOptional<z.ZodBoolean> {
+  return z
+    .boolean()
+    .describe(
+      'Only meaningful on a "plan your spending" (NEED) target: `true` sets aside the target ' +
+        "amount again each period, `false` refills the category up to it. YNAB ignores it on " +
+        "every other kind of target.",
+    )
+    .optional();
+}
