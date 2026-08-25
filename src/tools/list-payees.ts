@@ -2,7 +2,8 @@ import { z } from "zod";
 import { idArgument, planIdArgument } from "./arguments.ts";
 import { defineTool } from "./registry.ts";
 
-const payee = z.object({
+/** One payee, as both the list and the write tools report it. */
+export const payeeSchema = z.object({
   id: z.string().describe("The payee's id, which every tool that filters on a payee wants."),
   name: z.string().describe("The payee's name, as it reads in YNAB."),
   transfer_account_id: z
@@ -23,7 +24,7 @@ const payeeLocation = z.object({
 });
 
 /** What a payee is reported as; the SDK's payee is a superset. */
-type PlanPayee = z.infer<typeof payee>;
+type PlanPayee = z.infer<typeof payeeSchema>;
 
 /** What a payee location is reported as; the SDK's location is a superset. */
 type PlanPayeeLocation = z.infer<typeof payeeLocation>;
@@ -62,7 +63,7 @@ export const listPayees = defineTool({
   },
   outputSchema: {
     payees: z
-      .array(payee)
+      .array(payeeSchema)
       .optional()
       .describe(
         "The plan's payees, or the one `payee_id` named. Absent when `payee_location_id` " +
@@ -115,7 +116,7 @@ export const listPayees = defineTool({
 });
 
 /** Rebuilt field by field: what the API returns besides these is dropped on purpose. */
-function toPayee(from: PlanPayee): PlanPayee {
+export function toPayee(from: PlanPayee): PlanPayee {
   return { id: from.id, name: from.name, transfer_account_id: from.transfer_account_id };
 }
 

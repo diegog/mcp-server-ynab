@@ -785,6 +785,63 @@ says or as its description does, and whether an API-issued PATCH produces a
 model its own moves. The first is a first-week request ("budget for next month"),
 so it is the one to check first.
 
+### Accounts and payees on the write path
+
+Three one-shot creates with almost no arguments, and one of them is the only
+write in the server that cannot be undone through the API at all.
+
+**`create_account` has no undo, and the description says so first.**
+`/plans/{plan_id}/accounts/{account_id}` carries a `get` and nothing else; the
+SDK has `getAccounts`, `getAccountById` and `createAccount`. There is no rename,
+no close, no delete. A wrong name, type or opening balance can only be fixed by
+the user in the YNAB app, which is why the tool asks for confirmation up front
+and why the result echoes the whole account back — that is the last cheap moment
+to catch a mistake.
+
+**`type` is six values on create where `list_accounts` reports thirteen.**
+`SaveAccountType` is `checking`, `savings`, `cash`, `creditCard`, `otherAsset`
+and `otherLiability`. The seven missing ones are all loan-shaped and need an
+interest rate and a minimum payment in the product; YNAB gives no reason, and the
+changelog shows the set rolled out incrementally, so it is a growing allow-list
+with a re-check owed at ENG-38. The argument's own description names the six and
+says the rest have to be added in the app, because the model has otherwise just
+read thirteen type names out of `list_accounts` and has no way to know which are
+creatable.
+
+**`balance` is a decimal like every other money argument**, through
+`moneyArgument`. YNAB describes the field only as "The current balance of the
+account in milliunits format"; that it is an opening balance which materialises a
+Starting Balance transaction is product behaviour the API never states, so the
+description says YNAB records it as the starting balance and stops there. Nothing
+forbids a negative and two of the six creatable types are liabilities, so a
+negative is presumably how a credit card is opened — the API does not say that
+either, and the wording does not pretend otherwise.
+
+**`update_payee` requires the name that YNAB leaves optional.** `{"payee": {}}`
+is schema-legal on the PATCH and YNAB does not say what it does with it. Since
+`name` is the only field a payee has, an update without one spends a request to
+do something undocumented, so the tool requires it. Whether renaming a payee onto
+an existing payee's name merges the two is documented nowhere — not the spec, not
+the docs, not the changelog — and in the app renaming and combining are driven
+from the same window, so the description promises neither outcome and points at
+`list_payees` to check for a clash first.
+
+**`create_payee` is nearly redundant and says so.** `create_transaction`'s
+`payee_name` already resolves to an existing payee or creates one in the same
+request. It is kept because it is the only way to create a payee without also
+recording a transaction, and its description opens by naming the tool that is
+usually wanted instead.
+
+`payeeSchema` and `toPayee` come out of `list-payees.ts` and `toAccount` out of
+`list-accounts.ts` — the same rule `toCategory` follows: the shape stays in the
+list tool that owns it and the write imports it, rather than a second copy or a
+premature move into `shapes.ts`.
+
+Payee locations stay read-only: all three endpoints are GETs, so there is nothing
+to add. And neither payee endpoint documents a 404 even though the sibling GETs
+do, so a bad `plan_id` here may not come back as a not-found at all and the
+id-echoing path in `describeFailure` may never fire for these two.
+
 ### Error mapping
 
 `src/errors.ts` turns whatever a handler threw into one sentence of advice.
