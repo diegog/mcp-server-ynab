@@ -837,6 +837,65 @@ situation from ENG-26 again — and that `DeprecatedApi.bulkCreateTransactions` 
 skipped: undocumented in spec 1.86.0, still POSTing to the retired `/budgets`
 path, and carrying no `import_id` at all.
 
+### Scheduling transactions
+
+A scheduled transaction takes the same field set as a transaction minus the
+fields it has no concept of, so the three tools here sit beside the three above.
+`SaveScheduledTransaction` has nine fields — `account_id` and `date` required,
+then `amount`, `payee_id`, `payee_name`, `category_id`, `memo`, `flag_color` and
+`frequency`. There is no `cleared`, no `approved`, no `import_id` and no
+`subtransactions`, and the read shape differs too: `date` is replaced by
+`date_first` and `date_next`.
+
+**The update is a full replace, and that is what makes it safe to ship.**
+`PostScheduledTransactionWrapper` and `PutScheduledTransactionWrapper` are the
+same schema under two names, so `account_id` and `date` are required on update as
+well as create — a tool modelled on PATCH semantics fails validation without
+them. Whether the optional fields an update omits are preserved or cleared is
+undocumented, exactly as on the transaction PUT. That does not block this tool,
+because requiring the whole record is correct under *both* readings: if omission
+preserves, resending every value changes nothing; if omission clears, resending
+every value is the only thing that works. So the description says plainly that
+this replaces rather than patches, and sends the model to
+`list_scheduled_transactions` to carry over what it wants kept. The shared
+`scheduledTransactionFields` is what lets create and update take one field set
+described once.
+
+**`amount` is optional here where the read model requires it.** That is precisely
+the `args.amount ?? 0` hazard `toMilliunits`'s undefined overload exists for: a
+default of zero on an update would write a real amount away. The field is omitted
+from the body rather than zeroed.
+
+**The two date rules are caught locally.** YNAB says a date "should be a future
+date no more than 5 years into the future", and the transaction endpoint carries
+the mirror rule, so the two surfaces are complementary and disjoint. Both are
+worded as advice with no documented error, which makes them exactly the kind of
+rule worth catching before one of 200 requests is spent finding out. The
+five-year horizon is computed from today in UTC and named in the refusal.
+
+**`subtransactions` is declared solely in order to refuse it.** YNAB cannot
+express a split scheduled transaction — no field on the endpoint, no way to add
+lines afterwards — and zod strips unknown keys in silence, so a model passing
+`subtransactions` would otherwise get a schedule created quietly without its
+lines. That is the silent-success failure this codebase refuses everywhere else,
+and a schema field that exists to explain itself is cheaper than the alternative.
+
+**`frequency` is a strict enum with no default invented.** Thirteen values,
+unchanged since at least 2022. YNAB documents no default when it is omitted and
+no meaning for any individual value — `twiceAMonth` and `every4Weeks` in
+particular are undefined by the API — so the description says to take it from
+what the user said rather than guessing, and an invented value is refused before
+a request.
+
+`category_id` carries the Credit Card Payment restriction, documented rather than
+refused, for the reason given under "Recording transactions": knowing a
+category's group costs a `list_categories` call per write.
+
+`delete_scheduled_transaction` cancels the instruction and leaves occurrences
+already entered alone — those are ordinary transactions and `delete_transaction`
+is what removes one. YNAB returns the cancelled schedule in full, which is the
+only record of it left. None of the three responses carries `server_knowledge`.
+
 ### Assigning money to a month
 
 `set_category_budget` is the write that gets used daily, and its body is one

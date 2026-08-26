@@ -2,7 +2,9 @@ import { createAccount } from "./create-account.ts";
 import { createCategory } from "./create-category.ts";
 import { createCategoryGroup } from "./create-category-group.ts";
 import { createPayee } from "./create-payee.ts";
+import { createScheduledTransaction } from "./create-scheduled-transaction.ts";
 import { createTransaction } from "./create-transaction.ts";
+import { deleteScheduledTransaction } from "./delete-scheduled-transaction.ts";
 import { deleteTransaction } from "./delete-transaction.ts";
 import { getPlan } from "./get-plan.ts";
 import { getTransaction } from "./get-transaction.ts";
@@ -21,6 +23,7 @@ import { setCategoryBudget } from "./set-category-budget.ts";
 import { updateCategory } from "./update-category.ts";
 import { updateCategoryGroup } from "./update-category-group.ts";
 import { updatePayee } from "./update-payee.ts";
+import { updateScheduledTransaction } from "./update-scheduled-transaction.ts";
 
 /** Every tool the server can serve. Order here is irrelevant — the registry sorts. */
 export const TOOLS: readonly AnyToolDefinition[] = [
@@ -28,7 +31,9 @@ export const TOOLS: readonly AnyToolDefinition[] = [
   createCategory,
   createCategoryGroup,
   createPayee,
+  createScheduledTransaction,
   createTransaction,
+  deleteScheduledTransaction,
   deleteTransaction,
   getPlan,
   getTransaction,
@@ -46,4 +51,5 @@ export const TOOLS: readonly AnyToolDefinition[] = [
   updateCategory,
   updateCategoryGroup,
   updatePayee,
+  updateScheduledTransaction,
 ];
