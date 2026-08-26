@@ -728,6 +728,115 @@ amount changes, a Credit Card Payment `category_id` — comes back 200 with noth
 done, so `errors.ts` never sees it. Only a tool can refuse those, and each write
 tool has to.
 
+### Recording transactions
+
+The highest-traffic writes, and the ones with the most consequence if they are
+wrong. Three of the four tools ENG-31 scopes are here; `update_transaction` is
+deliberately absent, for the reason at the end of this section.
+
+**`create_transaction` always sends the array form.** The two body shapes are not
+two cardinalities of one behaviour — they differ in how a duplicate `import_id`
+comes back. The array form returns 201 with the skipped ids in
+`duplicate_import_ids` and creates the rest; the singular form is the only place
+in the whole spec that documents a 409. One row YNAB skipped should not fail the
+other nine, and "already recorded" is better handed to the model as data than as
+an error. The 409 branch in `errors.ts` stays anyway: nothing says the 409 is
+unreachable from the array form, and the asymmetry is implied by two field
+descriptions rather than asserted by either.
+
+Only `transaction_ids` and `server_knowledge` are required on a 201 —
+`transaction` and `transactions` are both optional, and nothing documents that
+the singular form populates `data.transaction`. So the handler reports
+`transaction_ids` unconditionally and the full records only when they came back.
+
+**The batch cap of 100 is ours, not YNAB's.** Neither array declares a
+`maxItems` anywhere in the spec, and YNAB's documented failure for a large
+payload is a 503 request timeout at thirty seconds rather than a clean validation
+error. 100 is well inside that envelope; the description says to split a larger
+batch.
+
+**A split's `category_id` is an explicit `null`.** That is YNAB's documented
+shape, and the SDK's generator dropped `| null` from `NewTransaction` the same
+way it did from `NewCategory`, so the null is asserted past a type that never
+allowed it, at one call site. Verified through the serialiser rather than
+assumed: a split sends `"category_id":null` beside its `subtransactions`, and an
+ordinary transaction sends no `category_id` key at all. A line has five fields,
+no date and no id — it inherits the parent's date, cleared state, approval and
+flag — and fewer than two lines is not a split, so the schema requires two.
+
+Splits are then effectively immutable: no endpoint adds, edits or removes a line,
+`subtransactions` updates error, and a split's `category_id` cannot be changed.
+The description says so, because a model that assumes otherwise will promise the
+user an edit it cannot perform.
+
+**Future dates are refused before a request is spent.** YNAB documents the rule
+on the endpoint and again on the field, so a future date is a certain 400 and
+worth catching locally — as is passing `category_id` beside `subtransactions`,
+which is the other way to word a split wrongly.
+
+**`import_id` is the dedupe key and the reason `create_transaction` is
+destructive.** Setting it tells YNAB the transaction was imported, and YNAB then
+matches it against a user-entered transaction on the same account for the same
+amount within ten days — on a match the imported amount wins, overwriting a
+record nothing can recover. So the tool exposes it, documents it, and does not
+default it: a transaction an agent records on the user's behalf should stay
+user-entered and eligible to be matched by the bank feed later.
+`import_transactions` reaches the same matching from the other side and carries
+`destructiveHint: true` for the same reason.
+
+**`approved` is the safety knob**, and it is left unset. YNAB documents the
+default — an API-created transaction is unapproved and waits in the user's
+Approve queue — so the description says what passing `true` skips rather than the
+tool choosing to skip it.
+
+**One silent-ignore is documented rather than refused, and that is a deviation
+from ENG-31.** YNAB ignores a Credit Card Payment `category_id` without saying
+so, returning 200 with nothing done. Refusing it up front means knowing which
+group a category belongs to, which is a `list_categories` call per write — a
+fan-out the hourly limit cannot absorb on the highest-traffic tool in the server.
+So the argument's description names the restriction and points at the group,
+which the model has usually just read. The alternative worth revisiting is
+comparing the requested `category_id` against the one that comes back, which
+costs nothing but only works when YNAB returned the records at all.
+
+**`import_transactions` reports "nothing new" as a success.** It takes no body,
+fetches on every linked account in the plan, and answers 200 for nothing imported
+or 201 for something. The SDK returns the parsed body and discards the status
+code, so the tool cannot tell the two apart and branches on
+`transaction_ids.length` instead. An empty list must read as a success or the
+model will retry — and it cannot say why it was empty, because nothing new, no
+linked accounts, and a broken bank connection are one shape here. The summary
+says so and names the two `list_accounts` fields that separate the last two.
+`TransactionsImportResponse` carries `transaction_ids` and nothing else, unlike
+every other transaction write.
+
+**`update_transaction` is not built yet, and that is not an oversight.** Neither
+the spec nor the docs say whether a field absent from a PUT or PATCH body is
+preserved or cleared. The schema is named `SaveTransactionWithOptionalFields` and
+declares nothing required, which reads like a partial update; the SDK's
+serialiser drops `undefined` and forwards an explicit `null`, so "omit" and
+"clear" are at least distinguishable on the wire. The server's reading of "omit"
+is documented nowhere. If omission clears, every update becomes read-then-write
+and costs two of 200 requests instead of one — a different tool, not a different
+paragraph — and read-then-merge is not a free fallback either, since resending a
+split's `subtransactions` errors and the read model's `SubTransaction` carries
+fields `SaveSubTransaction` will not accept. One live PUT of `{memo: "x"}`
+against a throwaway transaction settles it. Until someone runs that, a tool that
+might silently strip a memo or a category off a real financial record is worse
+than no tool.
+
+When it lands it uses PATCH, not PUT. The two take identical field sets save that
+PATCH's rows each carry an `id` or an `import_id`, which makes PATCH the only
+write path that can address a transaction by `import_id`, and it takes one row or
+many. PUT then goes unused: ENG-31 originally asked that all five endpoints be
+reachable, and the bar becomes every documented update capability, of which PATCH
+is a superset. Note also that `CustomTransactionsApi.createTransactions` is not a
+sixth endpoint — that class extends `TransactionsApi` and the method calls
+`this.createTransaction` with the same wrapper, the `getTransactionsByType`
+situation from ENG-26 again — and that `DeprecatedApi.bulkCreateTransactions` is
+skipped: undocumented in spec 1.86.0, still POSTing to the retired `/budgets`
+path, and carrying no `import_id` at all.
+
 ### Assigning money to a month
 
 `set_category_budget` is the write that gets used daily, and its body is one

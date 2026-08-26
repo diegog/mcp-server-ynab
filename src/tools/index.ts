@@ -2,9 +2,12 @@ import { createAccount } from "./create-account.ts";
 import { createCategory } from "./create-category.ts";
 import { createCategoryGroup } from "./create-category-group.ts";
 import { createPayee } from "./create-payee.ts";
+import { createTransaction } from "./create-transaction.ts";
+import { deleteTransaction } from "./delete-transaction.ts";
 import { getPlan } from "./get-plan.ts";
 import { getTransaction } from "./get-transaction.ts";
 import { getUser } from "./get-user.ts";
+import { importTransactions } from "./import-transactions.ts";
 import { listAccounts } from "./list-accounts.ts";
 import { listCategories } from "./list-categories.ts";
 import { listMoneyMovements } from "./list-money-movements.ts";
@@ -25,9 +28,12 @@ export const TOOLS: readonly AnyToolDefinition[] = [
   createCategory,
   createCategoryGroup,
   createPayee,
+  createTransaction,
+  deleteTransaction,
   getPlan,
   getTransaction,
   getUser,
+  importTransactions,
   listAccounts,
   listCategories,
   listMoneyMovements,
