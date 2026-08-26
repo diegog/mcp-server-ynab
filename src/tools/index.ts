@@ -24,6 +24,7 @@ import { updateCategory } from "./update-category.ts";
 import { updateCategoryGroup } from "./update-category-group.ts";
 import { updatePayee } from "./update-payee.ts";
 import { updateScheduledTransaction } from "./update-scheduled-transaction.ts";
+import { updateTransaction } from "./update-transaction.ts";
 
 /** Every tool the server can serve. Order here is irrelevant — the registry sorts. */
 export const TOOLS: readonly AnyToolDefinition[] = [
@@ -52,4 +53,5 @@ export const TOOLS: readonly AnyToolDefinition[] = [
   updateCategoryGroup,
   updatePayee,
   updateScheduledTransaction,
+  updateTransaction,
 ];
