@@ -16,7 +16,8 @@ export interface CacheOptions {
 
 /**
  * A read whose delta can be merged back into a cached collection without
- * guessing. `knowledgeAt` is where `lastKnowledgeOfServer` sits in the argument
+ * guessing. Exported because `at` is a claim about the SDK's own signatures
+ * that a test has to be able to check — see AGENTS.md, "Detecting drift". `knowledgeAt` is where `lastKnowledgeOfServer` sits in the argument
  * list — always last, but the arity differs per endpoint.
  *
  * `categories.getCategories` is deliberately absent: its collection is
@@ -25,7 +26,7 @@ export interface CacheOptions {
  * categories. Replacing a group under the wrong reading silently drops
  * categories, so that endpoint is cached but never refreshed by delta.
  */
-const DELTA: Readonly<Record<string, { at: number; collection: string; key: string }>> = {
+export const DELTA: Readonly<Record<string, { at: number; collection: string; key: string }>> = {
   "accounts.getAccounts": { at: 1, collection: "accounts", key: "id" },
   "payees.getPayees": { at: 1, collection: "payees", key: "id" },
   "months.getPlanMonths": { at: 1, collection: "months", key: "month" },
