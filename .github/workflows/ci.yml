@@ -1,0 +1,37 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          # The tests run TypeScript directly, so the runtime has to strip types.
+          node-version: 26
+          cache: npm
+      - run: npm ci
+      - run: npm run check
+      # The published artifact is compiled, so a green check is not enough on
+      # its own: the build has to produce something that starts.
+      - run: npm run build
+      - name: Server starts from the build output
+        env:
+          YNAB_ACCESS_TOKEN: ci-smoke-token
+        run: |
+          printf '%s\n' \
+            '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"ci","version":"0"}}}' \
+            '{"jsonrpc":"2.0","method":"notifications/initialized"}' \
+            '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' \
+            | node dist/index.js \
+            | node -e '
+              let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{
+                const t=d.trim().split("\n").map(JSON.parse).find(x=>x.id===2)?.result?.tools ?? [];
+                if (t.length === 0) { console.error("tools/list returned nothing"); process.exit(1); }
+                console.log(`${t.length} tools served from dist`);
+              });'

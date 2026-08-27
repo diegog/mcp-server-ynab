@@ -9,6 +9,14 @@
     "budget",
     "finance"
   ],
+  "homepage": "https://github.com/diegog/mcp-server-ynab#readme",
+  "bugs": {
+    "url": "https://github.com/diegog/mcp-server-ynab/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/diegog/mcp-server-ynab.git"
+  },
   "license": "MIT",
   "author": "Diego Garcia <diego@arrecho.tech>",
   "type": "module",
