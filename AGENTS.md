@@ -40,10 +40,11 @@ Conventions:
 ```bash
 npm run dev            # run the server, loading .env (no build step — see below)
 npm run build          # tsc → dist/, for publish
-npm run typecheck      # tsc --noEmit
+npm test               # node --test, no network, no framework
+npm run typecheck      # tsc --noEmit over src and test
 npm run lint           # biome check .
 npm run format         # biome check --write .
-npm run check          # lint + typecheck, what CI should gate on
+npm run check          # lint + typecheck + test, what CI should gate on
 ```
 
 ## Toolchain
@@ -138,6 +139,8 @@ src/tools/write-arguments.ts  the same, for the arguments only a write takes
 src/tools/shapes.ts           the records more than one tool file returns
 src/tools/index.ts            every tool the server can serve
 src/tools/<tool>.ts           one file per tool, named after it
+test/helpers/                 the faked YNAB, the fixtures, the in-memory server
+test/*.test.ts                one file per concern, run by `node --test`
 ```
 
 The tool layer stays transport-agnostic, so an HTTP transport can be added later
@@ -1091,6 +1094,53 @@ Payee locations stay read-only: all three endpoints are GETs, so there is nothin
 to add. And neither payee endpoint documents a 404 even though the sibling GETs
 do, so a bad `plan_id` here may not come back as a not-found at all and the
 id-echoing path in `describeFailure` may never fire for these two.
+
+### The test harness
+
+`node --test` with `node:test` and `node:assert/strict`. No test framework, for
+the reason there is no build step: Node 26 strips the types itself, so a test
+runs through the same mechanism `npm run dev` does, and the dependency list stays
+at three and three. Tests live in `test/`, outside the `src` that `tsconfig.json`
+compiles, so nothing under test reaches `dist`; `tsconfig.test.json` extends the
+build config to typecheck both.
+
+**The fake sits at the client-module boundary**, which is the seam `YnabClient`
+was made an interface for. `fakeClient` is a `Proxy`: every `client.api.<group>.<method>(...)`
+is looked up in a map keyed `"group.method"`, recorded, and answered from canned
+data. Nothing enumerates the SDK's surface, so a tool reaching a new endpoint
+needs no harness change — and an unlisted call **throws** rather than returning
+undefined, because a tool reaching for an endpoint the test did not anticipate is
+a fact worth failing on.
+
+**Fixtures are shaped as the SDK hands records over, not as they arrive on the
+wire.** The mappers in `FromJSON` turn a null into `undefined` for every optional
+field, so an absent value is written as an absent key. A literal `null` in a
+fixture is a shape no tool can ever see, and it fails an output schema that types
+the field as optional-not-nullable — which is exactly how this was discovered.
+
+Tests drive the **real server over an in-memory transport**, through `connect`
+rather than `server.connect`, so they exercise schema validation, the registry's
+result building and the error mapping in one path — and so the harness cannot
+pass where a real client fails on the omitted-`arguments` bug.
+
+**`tools/list` is snapshotted and the snapshot is committed.** Schema drift is
+the failure mode that degrades model behaviour without breaking anything, so the
+diff belongs in review rather than in production. Regenerate deliberately with
+`UPDATE_SNAPSHOTS=1 npm test` and read the diff. The comparison reports a
+structural difference before a byte difference, so a formatting-only change does
+not read as a schema change.
+
+A separate pass walks every registered tool and asserts it is named in
+snake_case, carries a title and a description long enough to say what it is for,
+declares an output schema, states all four annotations, and takes `plan_id`
+unless it is one of the two that cannot. Cheap, and it means a tool cannot ship
+half-defined.
+
+**What this does not cover.** Nothing here touches the network, so the questions
+only a live plan can answer stay open: whether a field omitted from a transaction
+PATCH survives, whether a month absent from a plan can be assigned to, and
+whether an API-issued assignment produces a `MoneyMovement` row. Those are
+recorded where the decisions they affect are, not here.
 
 ### Error mapping
 

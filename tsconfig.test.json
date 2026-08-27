@@ -1,0 +1,10 @@
+{
+  // Typecheck the tests alongside the source. The build config stays `src`-only
+  // so nothing under `test/` reaches `dist` — see AGENTS.md, "The test harness".
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "rootDir": "."
+  },
+  "include": ["src/**/*.ts", "test/**/*.ts"]
+}
