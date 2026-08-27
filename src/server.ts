@@ -1,6 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import type { YnabClient } from "./client.ts";
+import { registerResources } from "./resources.ts";
 import { TOOLS } from "./tools/index.ts";
 import { type AnyToolDefinition, registerTools } from "./tools/registry.ts";
 
@@ -28,6 +29,10 @@ export function createServer(client: YnabClient, options: ServerOptions = {}): M
   // Filtered before registration, never registered and disabled: see AGENTS.md,
   // "Read-only mode".
   registerTools(server, readOnly ? TOOLS.filter(reads) : TOOLS, { client });
+  // A second surface over the same handlers, and reads only — see AGENTS.md,
+  // "The resource layer". Registered before `connect` for the reason the tools
+  // are: `McpServer` throws if a capability is added after a transport.
+  registerResources(server, TOOLS.filter(reads), { client });
   return server;
 }
 

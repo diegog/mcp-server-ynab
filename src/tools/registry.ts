@@ -40,6 +40,12 @@ export interface ToolDefinition<
   readonly annotations: ToolHints;
   /** Returns plain data; the registry turns it into a tool result. */
   handler(args: Shaped<Input>, context: ToolContext): Promise<Shaped<Output>>;
+  /**
+   * Content blocks to send *instead of* the serialized payload — resource links,
+   * where a tool has something better to hand back than a body. Returning
+   * `undefined` keeps the default. See AGENTS.md, "The resource layer".
+   */
+  content?(data: Shaped<Output>): CallToolResult["content"] | undefined;
 }
 
 /** A tool definition with its schemas erased, for holding many in one array. */
@@ -73,7 +79,8 @@ export function registerTools(
       },
       async (args: Shaped<z.ZodRawShape>) => {
         try {
-          return toResult(await tool.handler(args, context));
+          const data = await tool.handler(args, context);
+          return toResult(data, tool.content?.(data));
         } catch (error) {
           return toErrorResult(
             describeFailure(error, {
@@ -98,10 +105,13 @@ function byName(a: AnyToolDefinition, b: AnyToolDefinition): number {
  * A tool with an `outputSchema` must return `structuredContent`; the text block
  * repeats it for clients that only read `content`. See AGENTS.md.
  */
-function toResult(data: Shaped<z.ZodRawShape>): CallToolResult {
+function toResult(
+  data: Shaped<z.ZodRawShape>,
+  content: CallToolResult["content"] | undefined,
+): CallToolResult {
   return {
     structuredContent: data,
-    content: [{ type: "text", text: JSON.stringify(data) }],
+    content: content ?? [{ type: "text", text: JSON.stringify(data) }],
   };
 }
 

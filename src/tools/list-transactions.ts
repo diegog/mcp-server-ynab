@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { YnabClient } from "../client.ts";
+import { transactionUri } from "../resources.ts";
 import {
   CURRENT_MONTH,
   dateShape,
@@ -8,7 +9,12 @@ import {
   planIdArgument,
 } from "./arguments.ts";
 import { defineTool } from "./registry.ts";
-import { toTransaction, transactionSchema, type YnabTransaction } from "./shapes.ts";
+import {
+  type Transaction,
+  toTransaction,
+  transactionSchema,
+  type YnabTransaction,
+} from "./shapes.ts";
 
 /** The transaction states YNAB can filter on. */
 const TYPES = ["uncategorized", "unapproved"] as const;
@@ -46,6 +52,18 @@ export type TransactionQuery =
   | (QueryFilters & { readonly method: "getTransactions" | "getTransactionsByType" })
   | (QueryFilters & { readonly method: ScopedMethod; readonly scope: string });
 
+/** A transaction reduced to a choice and a pointer at the rest of it. */
+const transactionLink = z.object({
+  uri: z.string().describe("Read this with `resources/read`, or `get_transaction` by id."),
+  id: z.string().describe("Id of the transaction."),
+  date: z.string().describe("Date it falls on, as ISO `YYYY-MM-DD`."),
+  amount: z.number().describe("Amount in milliunits, where 1000 is one currency unit."),
+  amount_formatted: z.string().optional().describe("`amount` in the plan's currency format."),
+  payee_name: z.string().optional().describe("Name of the payee, when it has one."),
+  category_name: z.string().optional().describe("Name of the category, or `Split`."),
+  memo: z.string().optional().describe("Free text on the transaction, when it has any."),
+});
+
 /** An ISO date bound. Shaped enough to catch a date that is not one at all. */
 function dateArgument(meaning: string, omitted: string): z.ZodOptional<z.ZodString> {
   return dateShape()
@@ -79,6 +97,15 @@ const inputSchema = {
     .describe(
       "Only transactions in this state: `uncategorized` for those with no category yet, " +
         "`unapproved` for imported ones nobody has approved. Omit for every state.",
+    )
+    .optional(),
+  as_links: z
+    .boolean()
+    .describe(
+      "Return a link and a one-line summary per transaction instead of the full record. Use " +
+        "it when the answer needs a sweep rather than the detail — a year of transactions in " +
+        "full is a great deal of text — then read the few you care about back by their URI, or " +
+        "with `get_transaction`. Off by default.",
     )
     .optional(),
 };
@@ -143,7 +170,18 @@ export const listTransactions = defineTool({
   outputSchema: {
     transactions: z
       .array(transactionSchema)
-      .describe("The matching transactions, newest last, as YNAB ordered them."),
+      .optional()
+      .describe(
+        "The matching transactions, newest last, as YNAB ordered them. Absent when `as_links` " +
+          "asked for links instead.",
+      ),
+    transaction_links: z
+      .array(transactionLink)
+      .optional()
+      .describe(
+        "One entry per matching transaction: enough to choose between them, and the URI to " +
+          "read the rest. Present only when `as_links` asked for them.",
+      ),
   },
   annotations: {
     readOnlyHint: true,
@@ -155,9 +193,52 @@ export const listTransactions = defineTool({
     const planId = client.resolvePlanId(args.plan_id);
     const query = planQuery(args);
     const rows = await fetchRows(client, planId, query);
-    return { transactions: rows.filter(inResidualScope(query.residual)).map(toTransaction) };
+    const matching = rows.filter(inResidualScope(query.residual)).map(toTransaction);
+
+    if (args.as_links !== true) return { transactions: matching };
+    return { transaction_links: matching.map((row) => toLink(planId, row)) };
+  },
+
+  /**
+   * Resource links in place of the payload. The summary rides in `description`,
+   * which is what lets a model pick without reading anything else.
+   */
+  content(data) {
+    if (data.transaction_links === undefined) return undefined;
+    return data.transaction_links.map((link) => ({
+      type: "resource_link" as const,
+      uri: link.uri,
+      name: link.id,
+      description: summarise(link),
+      mimeType: "application/json",
+    }));
   },
 });
+
+/** Enough of a transaction to choose it, plus where the rest of it lives. */
+function toLink(planId: string, row: Transaction): z.infer<typeof transactionLink> {
+  return {
+    uri: transactionUri(planId, row.id),
+    id: row.id,
+    date: row.date,
+    amount: row.amount,
+    ...(row.amount_formatted !== undefined && { amount_formatted: row.amount_formatted }),
+    ...(row.payee_name != null && { payee_name: row.payee_name }),
+    ...(row.category_name != null && { category_name: row.category_name }),
+    ...(row.memo !== undefined && { memo: row.memo }),
+  };
+}
+
+/** The one line a client shows beside a link. */
+function summarise(link: z.infer<typeof transactionLink>): string {
+  const parts = [
+    link.date,
+    link.payee_name ?? "(no payee)",
+    link.amount_formatted ?? `${link.amount}`,
+  ];
+  if (link.category_name !== undefined) parts.push(link.category_name);
+  return parts.join(" · ");
+}
 
 /** Run `query`, which has already chosen the endpoint. */
 async function fetchRows(
