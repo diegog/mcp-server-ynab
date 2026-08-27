@@ -3178,6 +3178,10 @@
             "unapproved"
           ],
           "description": "Only transactions in this state: `uncategorized` for those with no category yet, `unapproved` for imported ones nobody has approved. Omit for every state."
+        },
+        "as_links": {
+          "type": "boolean",
+          "description": "Return a link and a one-line summary per transaction instead of the full record. Use it when the answer needs a sweep rather than the detail — a year of transactions in full is a great deal of text — then read the few you care about back by their URI, or with `get_transaction`. Off by default."
         }
       },
       "$schema": "http://json-schema.org/draft-07/schema#"
@@ -3186,6 +3190,7 @@
       "type": "object",
       "properties": {
         "transactions": {
+          "description": "The matching transactions, newest last, as YNAB ordered them. Absent when `as_links` asked for links instead.",
           "type": "array",
           "items": {
             "type": "object",
@@ -3400,13 +3405,57 @@
               "account_name"
             ],
             "additionalProperties": false
-          },
-          "description": "The matching transactions, newest last, as YNAB ordered them."
+          }
+        },
+        "transaction_links": {
+          "description": "One entry per matching transaction: enough to choose between them, and the URI to read the rest. Present only when `as_links` asked for them.",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "uri": {
+                "type": "string",
+                "description": "Read this with `resources/read`, or `get_transaction` by id."
+              },
+              "id": {
+                "type": "string",
+                "description": "Id of the transaction."
+              },
+              "date": {
+                "type": "string",
+                "description": "Date it falls on, as ISO `YYYY-MM-DD`."
+              },
+              "amount": {
+                "type": "number",
+                "description": "Amount in milliunits, where 1000 is one currency unit."
+              },
+              "amount_formatted": {
+                "description": "`amount` in the plan's currency format.",
+                "type": "string"
+              },
+              "payee_name": {
+                "description": "Name of the payee, when it has one.",
+                "type": "string"
+              },
+              "category_name": {
+                "description": "Name of the category, or `Split`.",
+                "type": "string"
+              },
+              "memo": {
+                "description": "Free text on the transaction, when it has any.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "uri",
+              "id",
+              "date",
+              "amount"
+            ],
+            "additionalProperties": false
+          }
         }
       },
-      "required": [
-        "transactions"
-      ],
       "$schema": "http://json-schema.org/draft-07/schema#",
       "additionalProperties": false
     },

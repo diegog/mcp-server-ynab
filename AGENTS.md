@@ -135,6 +135,7 @@ src/client.ts                 the only place `ynab` is imported: auth + plan res
 src/errors.ts                 maps a failed call to text the model can recover from
 src/money.ts                  decimal amounts in, milliunits out, on the write path
 src/cache.ts                  in-memory reads, and deltas where they merge safely
+src/resources.ts              the same read surface again, as `ynab://` resources
 src/tools/registry.ts         the tool shape, and the one adapter onto the MCP SDK
 src/tools/arguments.ts        arguments more than one tool takes, described once
 src/tools/write-arguments.ts  the same, for the arguments only a write takes
@@ -1129,6 +1130,12 @@ rather than `server.connect`, so they exercise schema validation, the registry's
 result building and the error mapping in one path — and so the harness cannot
 pass where a real client fails on the omitted-`arguments` bug.
 
+That transport hands messages over **by reference, without serializing them**,
+which is worth knowing before writing an assertion: a `structuredContent` keeps
+its `undefined`-valued keys, where a real client would only ever see what
+survived `JSON.stringify`. Comparing two payloads for equality means comparing
+their JSON, not the objects.
+
 **`tools/list` is snapshotted and the snapshot is committed.** Schema drift is
 the failure mode that degrades model behaviour without breaking anything, so the
 diff belongs in review rather than in production. Regenerate deliberately with
@@ -1240,6 +1247,61 @@ taken back. It needs an `NPM_TOKEN` secret with publish rights.
 
 Nothing is published yet, deliberately: `npm publish` claims the name for good
 and a version can be deprecated but never truly unpublished.
+
+### The resource layer
+
+`src/resources.ts` serves the read surface a second time, as MCP resources under
+`ynab://`. It is genuinely optional — delete it and every tool still works —
+and it is a second surface over the M2 handlers rather than a second
+implementation: each entry names a read tool and maps the URI's variables onto
+that tool's arguments. `registerResources` is the only module besides
+`registry.ts` that knows anything is served over MCP.
+
+**Resources are the secondary path, and that is the spec working as designed.**
+Resources are application-driven: the host decides whether to surface them, which
+in many clients means a user-facing picker. Tools are model-controlled. An
+agentic budgeting server has to let the model go and get the data itself to
+answer "how much did I spend on groceries", so building the primary read path on
+resources would mean it could not reach anything the user had not attached first.
+Reads are tools; this layer is a bonus for clients that offer `@`-mentions.
+
+**Only read tools appear.** A resource is a thing to look at, and `resources/read`
+has no notion of a call that changes something. Read-only mode therefore changes
+nothing here.
+
+**Templates list nothing.** Every parameterised URI is registered with
+`list: undefined`, so it is discoverable through `resources/templates/list` and
+never enumerated. Enumerating one means listing every account of every plan to
+answer a request nobody made, out of 200 requests an hour.
+
+**Two URIs from the ticket are deliberately absent.** `settings` would be a
+second name for the same bytes — YNAB's settings endpoint returns the date and
+currency formats the plan export already carries, which is why `get_plan` makes
+one request and not two. And there is no bare `transactions` collection: it is
+the one list large enough that a URI per row is the point, which is what
+`as_links` below does instead.
+
+**`list_transactions` can answer with links instead of bodies.** `as_links: true`
+returns one entry per match — date, payee, amount, category, and the URI of the
+full record — and the registry turns those into `resource_link` content blocks
+with the summary in `description`. That is the spec's own bridge between the two
+primitives: a model sweeping a year of transactions reads a line each instead of
+a record each, then follows the few URIs it actually needs.
+
+It is the one tool here whose result has two shapes, which the "one shape either
+way" rule elsewhere argues against. The difference is that the caller chose:
+`as_links` is an argument the model passed, not a shape it has to discover. Both
+fields are optional in the schema and each says when the other is present.
+
+**The seam is `content` on a `ToolDefinition`.** A tool may return content blocks
+to send *instead of* the serialized payload; returning `undefined` keeps the
+default text block. The registry owns that choice so no tool file builds a
+`CallToolResult`, which is what has kept the tool layer transport-agnostic.
+
+**`cacheScope` is not set, because it cannot be.** ENG-37 asked for
+`cacheScope: "private"` throughout, which is the right instinct — these are one
+person's financial records. SDK 1.30.0 has no such field, for the reason given
+under "Caching against the rate limit". Recorded and left to ENG-38.
 
 ### Error mapping
 
