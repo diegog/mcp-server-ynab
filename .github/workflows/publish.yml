@@ -1,0 +1,37 @@
+name: Publish
+
+# Tag a release to publish: `npm version <patch|minor|major> && git push --follow-tags`.
+# Requires an NPM_TOKEN secret with publish rights on `mcp-server-ynab`.
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Lets npm record a provenance attestation linking the package to this run.
+      id-token: write
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 26
+          cache: npm
+          registry-url: https://registry.npmjs.org
+      - run: npm ci
+      # `prepublishOnly` runs check and build again; this fails the job before
+      # publishing rather than after.
+      - run: npm run check
+      - name: Tag matches package version
+        run: |
+          tagged="${GITHUB_REF_NAME#v}"
+          packaged="$(node -p "require('./package.json').version")"
+          if [ "$tagged" != "$packaged" ]; then
+            echo "tag $GITHUB_REF_NAME does not match package version $packaged" >&2
+            exit 1
+          fi
+      - run: npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

@@ -1207,6 +1207,40 @@ shared or proxying client. SDK 1.30.0 contains neither field anywhere, the same
 way it contains none of `InputRequiredResult`. Recorded as a decision, not an
 absence, and it belongs to the next SDK bump (ENG-38).
 
+### Publishing
+
+**The package is `mcp-server-ynab`, because `ynab-mcp` is taken.** ENG-36 wrote
+its client-config snippet against `ynab-mcp` and flagged the name as the one
+thing blocking it. The registry settles it: `ynab-mcp` has been published since
+July 2026 by someone else, and `mcp-server-ynab` — the name already in
+`package.json` — is free. The README uses that, and so must any snippet anyone
+copies out of an issue.
+
+**`files` is `["dist"]`**, so the tarball carries the compiled output and nothing
+else; npm adds `README.md`, `LICENSE` and `package.json` on its own. `src/` and
+`test/` stay out. `engines` says Node 20 because the *published* artifact is
+plain JavaScript — only local development needs Node 26 and its type stripping.
+
+**CI checks what will actually ship, not just the source.** `npm run check` is
+lint, typecheck and tests, all of which run against `src`. A green check says
+nothing about whether `tsc` produced something that starts, so the workflow also
+builds and drives `dist/index.js` over stdio, asserting `tools/list` comes back
+non-empty. That is the cheapest guard against the failure where the source is
+fine and the published package is inert.
+
+It doubles as a check on the ground rule: the smoke test parses the process's
+stdout as JSON-RPC, so a stray `console.log` anywhere in startup breaks the build
+rather than a user's client.
+
+**Publishing is tag-triggered and refuses a mismatched tag.** Pushing `v0.1.0`
+runs the checks, verifies the tag matches `package.json`'s version, and publishes
+with `--provenance`. A tag that disagrees with the manifest fails the job before
+anything reaches the registry, which is the one publishing mistake that cannot be
+taken back. It needs an `NPM_TOKEN` secret with publish rights.
+
+Nothing is published yet, deliberately: `npm publish` claims the name for good
+and a version can be deprecated but never truly unpublished.
+
 ### Error mapping
 
 `src/errors.ts` turns whatever a handler threw into one sentence of advice.
