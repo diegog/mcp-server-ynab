@@ -1322,6 +1322,15 @@ is cosmetic — but it is a deviation from the ticket, not an oversight.
 
 ### Read-only mode
 
+**A read tool's description may not name a tool read-only withholds.** Both
+lookup tools used to say an id was what "the transaction tools" or "the
+budgeting tools" take, which under `--read-only` points at a surface the model
+cannot see. Varying a description by mode would mean threading the mode into
+every `ToolDefinition`, which is machinery for a wording problem; naming the
+argument instead — the `account_id`, the `category_id` — is true in both modes
+and does not go stale when the tool surface changes. A test walks the read tools
+and fails on any that name a withheld tool, so this cannot drift back.
+
 `--read-only`, or `YNAB_READ_ONLY` in the environment, serves the read surface
 alone. Write tools are **not registered**, rather than registered and refusing: a
 tool the model cannot see is a tool it cannot be talked into trying.

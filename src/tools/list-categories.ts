@@ -121,7 +121,7 @@ export const listCategories = defineTool({
   title: "List categories",
   description:
     "List a plan's categories with what is assigned, spent and available in each. This is how a " +
-    'name like "Groceries" becomes the id the transaction and budgeting tools take. Categories ' +
+    'name like "Groceries" becomes the `category_id` other tools take. Categories ' +
     "come back flat, each naming the group it belongs to, rather than nested inside their " +
     "groups. Pass category_id for one category, month to report the amounts as of that month, " +
     "or both; either narrowing costs the group columns, dropping group_hidden and leaving " +

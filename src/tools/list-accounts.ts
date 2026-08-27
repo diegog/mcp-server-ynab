@@ -74,7 +74,7 @@ export const listAccounts = defineTool({
   title: "List accounts",
   description:
     "List a plan's accounts with their balances, or just one when account_id is given. This is " +
-    'how a name like "Chase Checking" becomes the id the transaction tools take. Closed and ' +
+    'how a name like "Chase Checking" becomes the `account_id` other tools take. Closed and ' +
     "off-budget accounts are included, each flagged as such.",
   inputSchema: {
     plan_id: planIdArgument(),

@@ -61,6 +61,25 @@ describe("tool definitions", () => {
     }
   });
 
+  it("never lets a read tool's description name a tool read-only withholds", () => {
+    // Under --read-only the write tools are not registered, so a read tool
+    // pointing at one describes a surface the model cannot see. See AGENTS.md,
+    // "Read-only mode".
+    const withheld = TOOLS.filter((tool) => !tool.annotations.readOnlyHint).map(
+      (tool) => tool.name,
+    );
+    for (const tool of TOOLS.filter((tool) => tool.annotations.readOnlyHint)) {
+      for (const name of withheld) {
+        assert.ok(
+          !tool.description.includes(name),
+          `${tool.name}'s description names ${name}, which --read-only withholds`,
+        );
+      }
+      // The families those tools travel in, which go stale the same way.
+      assert.doesNotMatch(tool.description, /budgeting tools|transaction tools|write tools/);
+    }
+  });
+
   it("names every read tool get_ or list_", () => {
     for (const tool of TOOLS.filter((tool) => tool.annotations.readOnlyHint)) {
       assert.match(tool.name, /^(get|list)_/);
