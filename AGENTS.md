@@ -78,8 +78,9 @@ live financial records. There is no sandbox. Treat write tools accordingly:
 annotate them, and leave read-only mode able to withhold them.
 
 **Rate limit: 200 requests/hour per token**, rolling window. Caching and delta
-requests (`last_knowledge_of_server`) are load-bearing, not optimisations
-(ENG-34). Avoid designs that fan out to many endpoints per tool call.
+requests (`last_knowledge_of_server`) are load-bearing, not optimisations — see
+"Caching against the rate limit". Avoid designs that fan out to many endpoints
+per tool call.
 
 **Budget is called "plan".** YNAB renamed it: every API group except
 `CustomTransactions` and `Deprecated` takes `planId`. Follow the API and use
@@ -133,6 +134,7 @@ src/server.ts                 builds the McpServer and registers the tools it se
 src/client.ts                 the only place `ynab` is imported: auth + plan resolution
 src/errors.ts                 maps a failed call to text the model can recover from
 src/money.ts                  decimal amounts in, milliunits out, on the write path
+src/cache.ts                  in-memory reads, and deltas where they merge safely
 src/tools/registry.ts         the tool shape, and the one adapter onto the MCP SDK
 src/tools/arguments.ts        arguments more than one tool takes, described once
 src/tools/write-arguments.ts  the same, for the arguments only a write takes
@@ -367,11 +369,14 @@ erases entirely: no module is imported at runtime, and `client.ts` is still the
 only place the SDK is reached.
 
 **Deleted transactions are not filtered out, and `deleted` is reported only when
-it is true.** YNAB returns a deleted row only to a delta request and this server
-sends no `last_knowledge_of_server` yet, so the field is `false` on every row
-these endpoints return today and a filter here would be policy that never runs.
-When ENG-34 turns deltas on, a deleted row is the only way the model learns a
-transaction went away, and dropping it would be exactly wrong.
+it is true.** YNAB returns a deleted row only to a delta request, and a tool
+never sees one: the cache drops deleted rows as it merges a delta, so a cached
+view and a full fetch answer identically. The field is therefore `false` on every
+row that reaches a mapper, and the filter that would remove it is policy that
+never runs. An earlier version of this note expected the opposite — that a
+deleted row would reach the model once deltas landed — which the caching layer
+settles the other way, and deliberately: the model is asking what the plan holds,
+not subscribing to a change feed. See "Caching against the rate limit".
 
 `amount_currency` is dropped with the rest of the `_currency` companions, and
 three more fields go on the way out: `import_payee_name` and
@@ -421,8 +426,8 @@ a plan given `"last-used"`, so `get_plan` cannot avoid making it. What it can
 avoid is re-serialising accounts, categories, payees, months and every
 transaction into the model's context, so each collection is reported as a single
 count and left to its own list tool. Those counts are of live records only:
-deleted records come back solely on delta requests, which nothing makes yet
-(ENG-34).
+deleted records come back solely on delta requests, and the cache drops those
+before a tool sees them.
 
 ### Accounts and categories
 
@@ -441,7 +446,8 @@ search. Flattening destroys what the group said about itself, so each row
 carries `group_name` and `group_hidden`. A hidden group hides its categories
 in YNAB whatever their own `hidden` says, and folding the two into one flag
 would state the category's own hiddenness wrongly. The group's `deleted` is
-not carried: deleted records only appear in delta requests, which are ENG-34.
+not carried: deleted records only appear in delta requests, and the cache
+drops them before a tool sees them.
 
 **`group_name` is best-effort, and the schema says so.** Only the whole-plan
 listing wraps a category in its group. `getCategoryById`,
@@ -536,10 +542,9 @@ payee: the same shape then serves the lookup, which has no payee to nest under.
 `latitude` and `longitude` stay strings, because that is what YNAB sends.
 
 **Neither tool returns `deleted` or `server_knowledge`.** YNAB sets `deleted`
-only on records that come back from a delta request, and we make none until
-ENG-34; a field that is `false` on every row of every response is a tax on the
-model's context, and once deltas land, reporting what vanished is that layer's
-job. A blank `month` or id counts as absent for the reason it does in
+only on records that come back from a delta request, and the cache drops those
+as it merges; a field that is `false` on every row of every response is a tax on
+the model's context. A blank `month` or id counts as absent for the reason it does in
 `resolvePlanId`: the alternative is asking YNAB for a record named `""`.
 
 ### Scheduled transactions and money movements
@@ -553,11 +558,10 @@ YNAB adds values without a major version, and a schema stricter than the API tur
 a working read into a tool error.
 
 **Deleted scheduled transactions never arrive.** YNAB returns them only to a
-delta request, which nothing here makes yet (ENG-34), so the output description
-says they are omitted rather than flagged: a model told they come back marked
-`deleted` would read their absence as proof that nothing had been deleted. The
-field itself stays in the shape, since it is what deltas will use once ENG-34
-lands.
+delta request, and the cache drops those before a tool sees them, so the output
+description says they are omitted rather than flagged: a model told they come
+back marked `deleted` would read their absence as proof that nothing had been
+deleted. The field stays in the shape because the merge reads it.
 
 `list_money_movements` covers four endpoints on two independent axes: `month`
 picks the `ByMonth` variant, `group_by_movement_group` picks the `Groups` variant,
@@ -707,7 +711,9 @@ export.
 
 **`server_knowledge` is dropped, deliberately.** Eleven of the sixteen write
 responses carry it, and it is a plan-wide counter and a free delta checkpoint, so
-ENG-34 will want it. Nothing reads it today, and a number the model cannot use is
+caching might have wanted it. It turned out not to: a write clears the plan's
+cached reads outright, so the knowledge value a write hands back is never the one
+the next read would send. Nothing reads it, and a number the model cannot use is
 context spent for nothing.
 
 **A 400 on a write leads with YNAB's own `detail`.** It is the only failure most
@@ -1142,6 +1148,65 @@ PATCH survives, whether a month absent from a plan can be assigned to, and
 whether an API-issued assignment produces a `MoneyMovement` row. Those are
 recorded where the decisions they affect are, not here.
 
+### Caching against the rate limit
+
+200 requests an hour, rolling. An agent exploring a plan spends them faster than
+it looks: a question about groceries is `list_categories`, then
+`list_transactions`, then a lookup or two. `src/cache.ts` puts an in-memory cache
+in front of the SDK so a repeated read costs nothing.
+
+**The cache is the quota win; deltas are not.** A delta request still costs one
+of the 200 — it saves bandwidth, not allowance. What saves allowance is answering
+without calling out at all. That ordering is why the cache is the part that had
+to be right.
+
+**A write clears the plan's reads wholesale, and nothing finer is safe.**
+Recording one transaction moves a category's balance and activity, the month's
+totals, the account's three balances, and can create a payee on the way past. A
+cache that expired only "transactions" would answer the model's next question
+with figures its own write had already changed — and on financial data a stale
+read is worse than a slow one, because the model may write again on top of it.
+Invalidation happens *before* the request goes out, so a write that fails partway
+leaves nothing behind it.
+
+**The wrapper goes on in `index.ts`, not in `createServer`.** `createServer`
+reads nothing from the environment, which is the seam the test harness builds
+through, so the TTL is read and the client wrapped one layer out.
+`YNAB_CACHE_TTL_SECONDS` sets the window, default 60; `0` disables the cache
+entirely. A value that is not a number stops the process rather than falling
+back, because a typo that silently disabled caching would surface only as an
+unexplained 429 an hour later.
+
+**Deltas run only where the merge is unambiguous.** Nine endpoints take
+`lastKnowledgeOfServer` and return a flat, keyed collection — accounts, payees,
+transactions and its four scoped variants, scheduled transactions, and months
+(keyed by `month` rather than `id`). Merging those is a replace-by-key, and a row
+YNAB marks deleted is dropped.
+
+`categories.getCategories` is **excluded on purpose.** Its collection is
+`category_groups`, each nesting its categories, and YNAB does not document
+whether a changed group comes back whole or carrying only the categories that
+changed. Replacing a group under the wrong reading silently drops categories the
+delta never mentioned — a wrong answer that looks like a right one. So that
+endpoint is cached like any other and simply refetched in full. Settling it needs
+a live plan; until then the full refetch costs bandwidth and nothing else.
+
+**Dropping deleted rows on merge is what keeps the read surface's promise.**
+Every read tool says it does not report deleted records. A merged view has to
+answer identically to a full fetch or that stops being true, so the merge removes
+what the delta marks deleted rather than passing it through. The consequence is
+worth stating plainly: turning deltas on did **not** ripple into the read tools,
+and no output schema had to start carrying `deleted`. The `deleted` field stays in
+the shapes because the merge is what reads it.
+
+**The protocol-level layer is not buildable yet.** Revision 2026-07-28 adds
+`ttlMs` and `cacheScope` to `tools/list` and the resource results, and
+`cacheScope: "private"` is what a client would need on anything carrying budget
+data — one person's financial records, where `"public"` would be a real leak in a
+shared or proxying client. SDK 1.30.0 contains neither field anywhere, the same
+way it contains none of `InputRequiredResult`. Recorded as a decision, not an
+absence, and it belongs to the next SDK bump (ENG-38).
+
 ### Error mapping
 
 `src/errors.ts` turns whatever a handler threw into one sentence of advice.
@@ -1179,8 +1244,8 @@ and nothing else retries immediately and burns what is left. The text states the
 cannot succeed, and that it should tell the user instead of looping. It cannot be
 more precise than that: YNAB stopped returning `X-Rate-Limit` on 429s in v1.73.0,
 and `new api(token)` takes only a token and a base URL, so there is no middleware
-seam to read response headers through anyway. If ENG-34 needs live quota, that
-seam has to be built first.
+seam to read response headers through anyway. Caching did not need live quota —
+it avoids requests rather than counting them — so that seam is still unbuilt.
 
 **No token can leak into a message.** Not by discipline but by construction —
 `errors.ts` never receives the token, and `createClient` is the only thing that
