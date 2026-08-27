@@ -17,7 +17,7 @@ jobs:
   fetch:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Fetch the published spec
         run: curl -sSfL --max-time 60 https://api.ynab.com/papi/open_api_spec.yaml -o spec/open_api_spec.yaml
