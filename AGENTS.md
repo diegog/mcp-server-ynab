@@ -144,6 +144,7 @@ src/tools/index.ts            every tool the server can serve
 src/tools/<tool>.ts           one file per tool, named after it
 test/helpers/                 the faked YNAB, the fixtures, the in-memory server
 test/*.test.ts                one file per concern, run by `node --test`
+spec/open_api_spec.yaml       YNAB's published spec, committed so drift is visible
 ```
 
 The tool layer stays transport-agnostic, so an HTTP transport can be added later
@@ -1302,6 +1303,57 @@ default text block. The registry owns that choice so no tool file builds a
 `cacheScope: "private"` throughout, which is the right instinct — these are one
 person's financial records. SDK 1.30.0 has no such field, for the reason given
 under "Caching against the rate limit". Recorded and left to ENG-38.
+
+### Detecting drift
+
+This codebase depends on a long list of facts about two upstreams — the `ynab`
+SDK and the MCP SDK — that neither of them promises to keep. `test/upstream.test.ts`
+asserts every one of them, so the day a fact moves a *located* test fails and
+says which decision has just opened. It replaces a habit of re-running the same
+greps by hand, which does not scale and did not happen.
+
+**A generator would be the wrong shape.** Enums, length caps, parameter
+positions and response fields are all mechanically derivable, so a generator
+could write them. Everything that makes this server better than a 1:1 endpoint
+mirror is not derivable: the descriptions, which are the product; which endpoints
+collapse into one tool; what gets dropped for context budget; the annotations;
+the merge semantics; the local refusals. Generating the tool layer would produce
+exactly the server M2 and M3 were spent avoiding.
+
+**So automation detects and proposes; a person decides.** `tools/list` is the
+model's entire interface, and its snapshot exists to make a change to it a
+reviewed event. Anything that regenerated schemas and merged would defeat that.
+
+What is asserted, and what each failure means:
+
+| fact | what a failure opens |
+| -- | -- |
+| the SDK's `SaveAccountType`, `TransactionClearedStatus`, `TransactionFlagColor` are all offered by our tools | an enum grew; widen it |
+| `ScheduledTransactionFrequency` still has thirteen values | the same, for scheduled transactions |
+| `NewCategoryToJSON` still drops `goal_frequency` | the SDK regenerated — expose the cadence |
+| `lastKnowledgeOfServer` sits at the index each entry in `DELTA` claims | the cache would append knowledge into the wrong argument and corrupt a delta refresh |
+| the MCP SDK's types mention neither `ttlMs` nor `cacheScope` | revision 2026-07-28 landed; set them |
+| `tools/call` with no `arguments` still fails when *not* wrapped by `connect` | the SDK fixed it — delete the wrapper and the section describing it |
+| every input schema still declares draft-07 | the ENG-22 deviation closed |
+| the spec's caps equal the constants in `write-arguments.ts` | a cap moved |
+
+That last row is why `spec/open_api_spec.yaml` is committed. The SDK's generated
+models drop every `maxLength`, so the spec is the only place they can be checked
+— and they are checked against the constants the tools actually use rather than
+a second copy in the test. `capsIn` is not a YAML parser: it pairs each
+`maxLength` with the nearest preceding key at a shallower indent, which is enough
+for a flat set of constants and avoids taking a dependency to read four numbers.
+
+`DELTA` is exported from `src/cache.ts` for the same reason — `at` is a claim
+about the SDK's own signatures, and a claim nothing can check is a comment.
+
+**Two watchers, because the SDK lags the spec.** `goal_frequency` has been in
+YNAB's spec since 1.86.0 and is still absent from the vendored SDK 4.5.0, which
+is why `update_category` cannot set a cadence. Watching npm alone means learning
+about YNAB changes late. So Dependabot opens dependency PRs, and a weekly
+workflow re-fetches the spec and opens one standing PR carrying the new copy —
+where CI's assertions are the verdict on it. A green spec PR still wants reading:
+a new endpoint or field is a design decision, and nothing here generates tools.
 
 ### Error mapping
 

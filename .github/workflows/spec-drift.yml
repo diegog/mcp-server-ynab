@@ -1,0 +1,65 @@
+name: YNAB spec drift
+
+# YNAB ships spec changes ahead of the SDK — goal_frequency has been in the spec
+# since 1.86.0 and is still missing from the vendored SDK — so watching only
+# npm means learning late. This opens a PR with the new spec; CI then runs the
+# assertions against it, and a red one says what moved.
+on:
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Fetch the published spec
+        run: curl -sSfL --max-time 60 https://api.ynab.com/papi/open_api_spec.yaml -o spec/open_api_spec.yaml
+
+      - name: Compare with the committed copy
+        id: diff
+        run: |
+          if git diff --quiet -- spec/open_api_spec.yaml; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "Spec is unchanged at $(grep -m1 '^  version:' spec/open_api_spec.yaml)."
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            {
+              echo "was=$(git show HEAD:spec/open_api_spec.yaml | grep -m1 '^  version:' | tr -d ' ' | cut -d: -f2)"
+              echo "now=$(grep -m1 '^  version:' spec/open_api_spec.yaml | tr -d ' ' | cut -d: -f2)"
+            } >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Open or update the drift PR
+        if: steps.diff.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WAS: ${{ steps.diff.outputs.was }}
+          NOW: ${{ steps.diff.outputs.now }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -C spec-drift
+          git add spec/open_api_spec.yaml
+          git commit -m "Update YNAB spec to ${WAS} → ${NOW}" -m "Opened by the spec-drift workflow. ENG-38"
+          git push --force origin spec-drift
+
+          # One standing PR: a weekly run updates it rather than stacking duplicates.
+          if [ -z "$(gh pr list --head spec-drift --state open --json number --jq '.[].number')" ]; then
+            gh pr create --head spec-drift --base main \
+              --title "YNAB spec ${WAS} → ${NOW}" \
+              --body "$(printf '%s\n' \
+                "The published spec moved. This PR carries the new copy; the checks on it are the verdict." \
+                "" \
+                "A red assertion in \`test/upstream.test.ts\` names what changed and what decision it opens — a cap that moved, an enum that grew, a field the SDK does not forward yet." \
+                "" \
+                "Green means the spec changed somewhere this codebase does not depend on. Read the diff anyway: a new endpoint or field is a design decision, not an automatic one, and nothing here generates tools." \
+                "" \
+                "ENG-38")"
+          fi

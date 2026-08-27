@@ -1,0 +1,20 @@
+# Bumps arrive as PRs; CI runs test/upstream.test.ts against them. A red
+# assertion there is the point — it names the decision the bump just opened,
+# rather than leaving someone to notice. See AGENTS.md, "Detecting drift".
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      # One PR for the toolchain, which moves together and decides nothing.
+      toolchain:
+        patterns: ["@biomejs/*", "typescript", "@types/*"]
+    # `ynab` and `@modelcontextprotocol/sdk` stay ungrouped on purpose: each is
+    # an upstream the drift assertions are about, and each deserves its own read.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
