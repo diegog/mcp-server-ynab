@@ -2200,7 +2200,7 @@
   {
     "name": "list_accounts",
     "title": "List accounts",
-    "description": "List a plan's accounts with their balances, or just one when account_id is given. This is how a name like \"Chase Checking\" becomes the id the transaction tools take. Closed and off-budget accounts are included, each flagged as such.",
+    "description": "List a plan's accounts with their balances, or just one when account_id is given. This is how a name like \"Chase Checking\" becomes the `account_id` other tools take. Closed and off-budget accounts are included, each flagged as such.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -2330,7 +2330,7 @@
   {
     "name": "list_categories",
     "title": "List categories",
-    "description": "List a plan's categories with what is assigned, spent and available in each. This is how a name like \"Groceries\" becomes the id the transaction and budgeting tools take. Categories come back flat, each naming the group it belongs to, rather than nested inside their groups. Pass category_id for one category, month to report the amounts as of that month, or both; either narrowing costs the group columns, dropping group_hidden and leaving group_name to whether YNAB names the group on the category. Hidden categories and YNAB's own \"Ready to Assign\" are included.",
+    "description": "List a plan's categories with what is assigned, spent and available in each. This is how a name like \"Groceries\" becomes the `category_id` other tools take. Categories come back flat, each naming the group it belongs to, rather than nested inside their groups. Pass category_id for one category, month to report the amounts as of that month, or both; either narrowing costs the group columns, dropping group_hidden and leaving group_name to whether YNAB names the group on the category. Hidden categories and YNAB's own \"Ready to Assign\" are included.",
     "inputSchema": {
       "type": "object",
       "properties": {
