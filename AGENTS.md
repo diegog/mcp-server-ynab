@@ -731,8 +731,8 @@ tool has to.
 ### Recording transactions
 
 The highest-traffic writes, and the ones with the most consequence if they are
-wrong. Three of the four tools ENG-31 scopes are here; `update_transaction` is
-deliberately absent, for the reason at the end of this section.
+wrong. All four of ENG-31's tools are here; `update_transaction` carries a contract
+worth reading before it is changed, at the end of this section.
 
 **`create_transaction` always sends the array form.** The two body shapes are not
 two cardinalities of one behaviour — they differ in how a duplicate `import_id`
@@ -810,25 +810,47 @@ says so and names the two `list_accounts` fields that separate the last two.
 `TransactionsImportResponse` carries `transaction_ids` and nothing else, unlike
 every other transaction write.
 
-**`update_transaction` is not built yet, and that is not an oversight.** Neither
-the spec nor the docs say whether a field absent from a PUT or PATCH body is
-preserved or cleared. The schema is named `SaveTransactionWithOptionalFields` and
+**`update_transaction` demands the whole record, and that is how it ships without
+the live check.** Neither the spec nor the docs say whether a field absent from a
+PUT or PATCH body is preserved or cleared. `SaveTransactionWithOptionalFields`
 declares nothing required, which reads like a partial update; the SDK's
 serialiser drops `undefined` and forwards an explicit `null`, so "omit" and
 "clear" are at least distinguishable on the wire. The server's reading of "omit"
-is documented nowhere. If omission clears, every update becomes read-then-write
-and costs two of 200 requests instead of one — a different tool, not a different
-paragraph — and read-then-merge is not a free fallback either, since resending a
-split's `subtransactions` errors and the read model's `SubTransaction` carries
-fields `SaveSubTransaction` will not accept. One live PUT of `{memo: "x"}`
-against a throwaway transaction settles it. Until someone runs that, a tool that
-might silently strip a memo or a category off a real financial record is worse
-than no tool.
+is documented nowhere, and one live PUT of `{memo: "x"}` against a throwaway
+transaction would settle it.
 
-When it lands it uses PATCH, not PUT. The two take identical field sets save that
-PATCH's rows each carry an `id` or an `import_id`, which makes PATCH the only
-write path that can address a transaction by `import_id`, and it takes one row or
-many. PUT then goes unused: ENG-31 originally asked that all five endpoints be
+Waiting for that is not the only option, because **requiring the caller to send
+the complete transaction is correct under both readings**: if omission preserves,
+resending every value changes nothing; if omission clears, resending every value
+is the only thing that works. So `account_id`, `date` and `amount` are required
+on every row, the description says to read the transaction first and carry over
+what the user wants kept, and the result invites a comparison against what was
+sent. The cost is a `get_transaction` that may turn out to have been
+unnecessary — one of 200 requests, spent to avoid silently stripping a memo or a
+category off a real financial record. When the live check happens, that
+requirement is what relaxes.
+
+This is the same reasoning `update_scheduled_transaction` runs on, where YNAB
+settles it for us: its update wrapper is the create wrapper, `account_id` and
+`date` required, so that endpoint is a replace by construction.
+
+**Splits are refused rather than attempted, and `subtransactions` is declared in
+order to refuse it.** YNAB errors on `subtransactions` for a transaction that is
+already a split, offers no endpoint that adds, edits or removes a line, and will
+not change a split's `category_id` — so a split is effectively immutable and the
+fix is to delete and recreate. Zod strips unknown keys in silence, so without a
+declared field a model attempting a split edit would get a *successful* update
+that quietly dropped the lines from its request. Read-then-merge would not have
+saved it either: the read model's `SubTransaction` carries `id`,
+`transaction_id` and `deleted`, which `SaveSubTransaction` does not accept.
+
+Addressing is by `id` or by `import_id` and exactly one of the two — neither is
+refused as unaddressed, both as ambiguous. `import_id` is the only way to reach a
+transaction whose id was never seen, and it is why PATCH is a superset of PUT.
+
+It uses PATCH, not PUT. The two take identical field sets save that PATCH's rows
+each carry an `id` or an `import_id`, and it takes one row or many. PUT therefore
+goes unused: ENG-31 originally asked that all five endpoints be
 reachable, and the bar becomes every documented update capability, of which PATCH
 is a superset. Note also that `CustomTransactionsApi.createTransactions` is not a
 sixth endpoint — that class extends `TransactionsApi` and the method calls
