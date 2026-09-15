@@ -29,5 +29,10 @@
     "declarationMap": true,
     "sourceMap": true
   },
-  "include": ["src/**/*.ts"]
+  "include": ["src/**/*.ts"],
+  // The remote entrypoint is a deploy target, not part of the published
+  // package: `dist` stays stdio-only, so `files` and `bin` keep their meaning
+  // and the tarball keeps its Node 20 floor. `tsconfig.test.json` puts these
+  // back, because they are still typechecked. See AGENTS.md, "The remote surface".
+  "exclude": ["src/http.ts", "src/remote/**/*.ts"]
 }
