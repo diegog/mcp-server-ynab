@@ -10,6 +10,7 @@ import { describe, it } from "node:test";
 import { fileURLToPath } from "node:url";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { requireBearerAuth } from "@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js";
 import { CallToolResultSchema } from "@modelcontextprotocol/sdk/types.js";
 import * as ynab from "ynab";
 import { DELTA } from "../src/cache.ts";
@@ -164,6 +165,72 @@ describe("the MCP SDK still lacks what we are waiting on", () => {
     } finally {
       await test.close();
     }
+  });
+});
+
+describe("the remote surface rests on what the two SDKs do today", () => {
+  const sdkFile = (path: string): string =>
+    readFileSync(
+      fileURLToPath(
+        new URL(`../node_modules/@modelcontextprotocol/sdk/dist/esm/${path}`, import.meta.url),
+      ),
+      "utf8",
+    );
+
+  it("the ynab SDK still resolves a function access token per request — if this fails, clientForToken is broken", async () => {
+    const getToken = async () => "t";
+    const configuration = new ynab.Configuration({ accessToken: getToken });
+    assert.equal(await configuration.accessToken?.("bearer", []), "t");
+  });
+
+  it("requireBearerAuth still does not validate resource — if this fails, drop the provider's own check", async () => {
+    const verifier = {
+      verifyAccessToken: async () => ({
+        token: "t",
+        clientId: "c",
+        scopes: [],
+        expiresAt: Date.now() / 1000 + 60,
+        resource: new URL("https://somewhere-else.example/mcp"),
+      }),
+    };
+    const middleware = requireBearerAuth({ verifier });
+    let passed = false;
+    await middleware(
+      { headers: { authorization: "Bearer t" } } as never,
+      { set: () => undefined, status: () => ({ json: () => undefined }) } as never,
+      () => {
+        passed = true;
+      },
+    );
+    assert.equal(passed, true, "the SDK now checks the token's resource itself");
+  });
+
+  it("ProxyOAuthServerProvider still forwards the client's redirect_uri upstream — the reason we are not using it", () => {
+    const source = sdkFile("server/auth/providers/proxyProvider.js");
+    assert.ok(source.includes("redirect_uri: params.redirectUri"));
+  });
+
+  it("no Client ID Metadata Documents — if this fails, offer CIMD and demote DCR (ENG-38)", () => {
+    for (const path of [
+      "server/auth/router.js",
+      "server/auth/handlers/authorize.js",
+      "server/auth/handlers/register.js",
+    ]) {
+      assert.ok(!sdkFile(path).includes("client_id_metadata_document"), path);
+    }
+  });
+
+  it("no iss on authorization responses — if this fails, the provider can stop adding it", () => {
+    const source = sdkFile("server/auth/handlers/authorize.js");
+    assert.ok(!/["']iss["']/.test(source));
+    assert.ok(
+      !sdkFile("server/auth/router.js").includes("authorization_response_iss_parameter_supported"),
+    );
+  });
+
+  it("the token handler still hands code_verifier to the provider when local PKCE is skipped", () => {
+    const source = sdkFile("server/auth/handlers/token.js");
+    assert.ok(source.includes("skipLocalPkceValidation ? code_verifier : undefined"));
   });
 });
 

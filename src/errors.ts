@@ -87,8 +87,9 @@ function advise(failure: YnabFailure, args: unknown): string {
       );
     case "403.3":
       return (
-        "the access token lacks the scope this request needs. A Personal Access Token carries " +
-        "full scope, so the server was most likely given an OAuth token instead. Do not retry."
+        "the YNAB token behind this connection is read-only, so YNAB refuses anything that " +
+        "changes the plan. Over the remote server that is a choice the user made when connecting; " +
+        "they can disconnect and connect again allowing changes. No argument or retry will help."
       );
     case "403.4":
       return (
@@ -115,11 +116,11 @@ function advise(failure: YnabFailure, args: unknown): string {
       );
     case 401:
       return (
-        "the YNAB access token is missing, invalid, revoked, or expired. The server reads it " +
-        "from `YNAB_ACCESS_TOKEN` in its own environment at startup, so no tool argument and no " +
-        "retry can fix it: the account holder has to put a valid Personal Access Token from " +
-        "https://app.ynab.com/settings/developer into this server's MCP client configuration " +
-        "and restart it."
+        "the YNAB access token is missing, invalid, revoked, or expired, so no tool argument " +
+        "and no retry can fix it. Over stdio the server reads a Personal Access Token from " +
+        "`YNAB_ACCESS_TOKEN` at startup, and the account holder has to put a valid one from " +
+        "https://app.ynab.com/settings/developer into the MCP client configuration and restart " +
+        "it; over the remote server the user has to disconnect this server and connect it again."
       );
     case 403:
       return (

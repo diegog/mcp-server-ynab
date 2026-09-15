@@ -23,7 +23,7 @@ describe("YNAB failures", () => {
     ["403", /refused|restriction/i],
     ["403.1", /subscription/i],
     ["403.2", /trial/i],
-    ["403.3", /scope/i],
+    ["403.3", /read-only/i],
     ["403.4", /limit/i],
     ["404", /no such record/i],
     ["404.1", /endpoint does not exist/i],
