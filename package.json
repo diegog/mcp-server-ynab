@@ -45,7 +45,7 @@
     "@modelcontextprotocol/sdk": "^1.30.0",
     "express": "^5.2.1",
     "ynab": "^4.5.0",
-    "zod": "^4.4.3"
+    "zod": "^4.6.2"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.13",
