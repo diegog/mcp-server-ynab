@@ -32,6 +32,7 @@
   ],
   "scripts": {
     "dev": "node --env-file-if-exists=.env src/index.ts",
+    "dev:http": "node --env-file-if-exists=.env src/http.ts",
     "build": "tsc",
     "test": "node --test 'test/**/*.test.ts'",
     "prepublishOnly": "npm run check && npm run build",
@@ -42,11 +43,13 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",
+    "express": "^5.2.1",
     "ynab": "^4.5.0",
     "zod": "^4.4.3"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.10",
+    "@types/express": "^5.0.6",
     "@types/node": "^26.3.0",
     "typescript": "^7.0.2"
   }

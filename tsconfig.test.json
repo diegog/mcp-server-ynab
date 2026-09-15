@@ -6,5 +6,8 @@
     "noEmit": true,
     "rootDir": "."
   },
-  "include": ["src/**/*.ts", "test/**/*.ts"]
+  "include": ["src/**/*.ts", "test/**/*.ts"],
+  // Undo the build config's exclusion: the remote entrypoint ships in no
+  // tarball but is still typechecked and still tested.
+  "exclude": []
 }
