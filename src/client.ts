@@ -50,6 +50,26 @@ export function createClient(env: NodeJS.ProcessEnv = process.env): YnabClient {
   };
 }
 
+/**
+ * A client whose token is resolved on every request, for the remote entrypoint
+ * where the token is a user's OAuth grant that refreshes under it. Nothing
+ * captures the token: `getToken` is asked each time, and the SDK awaits it per
+ * request. See AGENTS.md, "The remote surface".
+ */
+export function clientForToken(
+  getToken: () => Promise<string>,
+  options: { readonly defaultPlanId?: string | undefined } = {},
+): YnabClient {
+  const fallbackPlanId = provided(options.defaultPlanId) ?? LAST_USED_PLAN_ID;
+  return {
+    // The constructor is typed for a string but assigns straight into
+    // `Configuration({ accessToken })`, which accepts a function and calls it
+    // per request. The cast is checked in test/upstream.test.ts.
+    api: new Ynab(getToken as unknown as string),
+    resolvePlanId: (planId) => provided(planId) ?? fallbackPlanId,
+  };
+}
+
 /** Blank counts as absent, so it falls through to the next fallback. */
 function provided(value: string | undefined): string | undefined {
   const trimmed = value?.trim();

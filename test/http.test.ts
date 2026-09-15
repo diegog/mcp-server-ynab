@@ -2,56 +2,34 @@
  * The remote entrypoint over a real socket. Driven with the SDK's own client
  * rather than hand-built JSON-RPC, for the reason the in-memory harness is:
  * a test that does not speak the protocol cannot fail where a client would.
+ * Every connection here is authenticated first; the flow itself is tested in
+ * `oauth.test.ts`.
  */
 import assert from "node:assert/strict";
-import { once } from "node:events";
-import type { AddressInfo } from "node:net";
 import { describe, it } from "node:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
-import { createApp } from "../src/http.ts";
-import { fakeClient, type Replies } from "./helpers/fake-client.ts";
+import { accessToken, type Remote, type RemoteOptions, remote } from "./helpers/remote.ts";
 
-const USER: Replies = { "user.getUser": { data: { user: { id: "user-1" } } } };
-
-interface Served {
-  /** Where the app is listening, without a path. */
-  readonly origin: string;
-  close(): Promise<void>;
-}
-
-/** Bind the real app on an ephemeral port with a faked YNAB behind it. */
-async function serve(replies: Replies = {}, readOnly?: boolean): Promise<Served> {
-  const app = createApp({
-    client: fakeClient(replies),
-    ...(readOnly === undefined ? {} : { readOnly }),
-  });
-  const listener = app.listen(0, "127.0.0.1");
-  await once(listener, "listening");
-  const { port } = listener.address() as AddressInfo;
-
-  return {
-    origin: `http://127.0.0.1:${port}`,
-    close: async () => {
-      // Keep-alive sockets would otherwise hold `close` open past the test.
-      listener.closeAllConnections();
-      await new Promise<void>((resolve, reject) => {
-        listener.close((error) => (error ? reject(error) : resolve()));
-      });
-    },
-  };
-}
-
-/** A connected MCP client, and the teardown for both ends. */
-async function connected(replies: Replies = {}, readOnly?: boolean) {
-  const served = await serve(replies, readOnly);
+/** A connected MCP client, authenticated, and the teardown for both ends. */
+async function connected(options: RemoteOptions = {}, scope?: string) {
+  const served = await remote(options);
   const client = new Client({ name: "test", version: "0" });
-  const transport = new StreamableHTTPClientTransport(new URL(`${served.origin}/mcp`));
-  // Cast for the same `exactOptionalPropertyTypes` mismatch `src/http.ts`
-  // explains: the HTTP transports type `sessionId` as `string | undefined`
-  // where `Transport` has it optional.
-  await client.connect(transport as unknown as Transport);
+  try {
+    const { access } = await accessToken(served, scope === undefined ? {} : { scope });
+    const transport = new StreamableHTTPClientTransport(new URL("/mcp", served.origin), {
+      requestInit: { headers: { authorization: `Bearer ${access}` } },
+    });
+    // Cast for the same `exactOptionalPropertyTypes` mismatch `src/http.ts`
+    // explains: the HTTP transports type `sessionId` as `string | undefined`
+    // where `Transport` has it optional.
+    await client.connect(transport as unknown as Transport);
+  } catch (error) {
+    // A server left listening keeps the runner alive past a failed setup.
+    await served.close();
+    throw error;
+  }
 
   return {
     client,
@@ -63,23 +41,47 @@ async function connected(replies: Replies = {}, readOnly?: boolean) {
   };
 }
 
+/** `POST /mcp` by hand, with or without a token. */
+function post(served: Remote, body: unknown, access?: string): Promise<Response> {
+  return fetch(new URL("/mcp", served.origin), {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      accept: "application/json, text/event-stream",
+      ...(access === undefined ? {} : { authorization: `Bearer ${access}` }),
+    },
+    body: JSON.stringify(body),
+  });
+}
+
+const INITIALIZE = {
+  jsonrpc: "2.0",
+  id: 1,
+  method: "initialize",
+  params: {
+    protocolVersion: "2025-06-18",
+    capabilities: {},
+    clientInfo: { name: "test", version: "0" },
+  },
+};
+
 describe("the remote entrypoint", () => {
   it("serves the tool surface to a real MCP client", async () => {
-    const test = await connected(USER);
+    const test = await connected();
     try {
       const { tools } = await test.client.listTools();
       assert.ok(tools.length > 0, "tools/list came back empty");
       assert.ok(
         tools.some((tool) => tool.name === "create_transaction"),
-        "the write surface is missing from a read-write server",
+        "the write surface is missing from a read-write connection",
       );
     } finally {
       await test.close();
     }
   });
 
-  it("runs a tool call through to the client", async () => {
-    const test = await connected(USER);
+  it("runs a tool call through to the caller's own client", async () => {
+    const test = await connected();
     try {
       const result = await test.client.callTool({ name: "get_user" });
       assert.notEqual(result.isError, true, JSON.stringify(result));
@@ -90,7 +92,7 @@ describe("the remote entrypoint", () => {
   });
 
   it("serves the resource layer over the same endpoint", async () => {
-    const test = await connected(USER);
+    const test = await connected();
     try {
       const { contents } = await test.client.readResource({ uri: "ynab://user" });
       const [content] = contents;
@@ -102,10 +104,10 @@ describe("the remote entrypoint", () => {
     }
   });
 
-  it("withholds the write surface when the connection is read-only", async () => {
+  it("withholds the write surface when the server is read-only for everyone", async () => {
     // Same rule as stdio: filtered before registration, never registered and
-    // disabled — see AGENTS.md, "Read-only mode".
-    const test = await connected(USER, true);
+    // disabled — see AGENTS.md, "Read-only mode". Scope tests live in oauth.test.ts.
+    const test = await connected({ readOnly: true });
     try {
       const { tools } = await test.client.listTools();
       assert.ok(tools.length > 0);
@@ -122,26 +124,10 @@ describe("the remote entrypoint", () => {
   it("issues no session id, because it keeps no session", async () => {
     // Statelessness is the security posture, not a simplification: there is no
     // session to hijack and every request carries its own authorization.
-    const served = await serve(USER);
+    const served = await remote();
     try {
-      const response = await fetch(`${served.origin}/mcp`, {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          accept: "application/json, text/event-stream",
-        },
-        body: JSON.stringify({
-          jsonrpc: "2.0",
-          id: 1,
-          method: "initialize",
-          params: {
-            protocolVersion: "2025-06-18",
-            capabilities: {},
-            clientInfo: { name: "test", version: "0" },
-          },
-        }),
-      });
-
+      const { access } = await accessToken(served);
+      const response = await post(served, INITIALIZE, access);
       assert.equal(response.status, 200);
       assert.equal(response.headers.get("mcp-session-id"), null);
       await response.body?.cancel();
@@ -153,9 +139,9 @@ describe("the remote entrypoint", () => {
   it("answers /healthz without touching YNAB", async () => {
     // No replies configured: `fakeClient` throws on any call, so a probe that
     // reached the API would fail here rather than pass quietly.
-    const served = await serve();
+    const served = await remote({ replies: {} });
     try {
-      const response = await fetch(`${served.origin}/healthz`);
+      const response = await fetch(new URL("/healthz", served.origin));
       assert.equal(response.status, 200);
       assert.equal(((await response.json()) as { status: string }).status, "ok");
     } finally {
@@ -164,10 +150,10 @@ describe("the remote entrypoint", () => {
   });
 
   it("refuses GET and DELETE on /mcp", async () => {
-    const served = await serve();
+    const served = await remote();
     try {
       for (const method of ["GET", "DELETE"]) {
-        const response = await fetch(`${served.origin}/mcp`, { method });
+        const response = await fetch(new URL("/mcp", served.origin), { method });
         assert.equal(response.status, 405, `${method} was not refused`);
         assert.equal(response.headers.get("allow"), "POST");
         await response.body?.cancel();
